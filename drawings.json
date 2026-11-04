@@ -1,0 +1,52 @@
+{
+  "pdf": [
+    {
+      "name": "Grasten.pdf",
+      "url": "Grasten.pdf"
+    }
+  ],
+  "dxf": [
+    {
+      "name": "Grasten.DXF",
+      "url": "Grasten.DXF",
+      "views": [
+        {
+          "name": "Все слои",
+          "url": "drawing-110.svg"
+        },
+        {
+          "name": "Этаж_1",
+          "url": "drawing-110-1.svg"
+        },
+        {
+          "name": "Этаж_1_LeftElev",
+          "url": "drawing-110-2.svg"
+        },
+        {
+          "name": "Этаж_1_LeftElevDIMLINES",
+          "url": "drawing-110-3.svg"
+        },
+        {
+          "name": "Этаж_1_RightElev",
+          "url": "drawing-110-4.svg"
+        },
+        {
+          "name": "Этаж_1_RightElevDIMLINES",
+          "url": "drawing-110-5.svg"
+        },
+        {
+          "name": "Этаж_1DIMLINES",
+          "url": "drawing-110-6.svg"
+        },
+        {
+          "name": "Этаж_2",
+          "url": "drawing-110-7.svg"
+        },
+        {
+          "name": "Этаж_2_FloorRail",
+          "url": "drawing-110-8.svg"
+        }
+      ]
+    }
+  ]
+}
