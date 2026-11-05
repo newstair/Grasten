@@ -4803,10 +4803,10 @@ async function buildClientPriceModal() {
   result.groups.forEach((group) => {
     const groupBlock = document.createElement('div');
     groupBlock.className = 'price-group';
-    const groupTotal = group.materialTotal + group.paintTotal;
+    const groupTotal = group.materialTotal;
     const title = document.createElement('div');
     title.className = 'price-group-title';
-    title.innerHTML = '<span>' + group.title + '</span><span class="sum">' + formatRub(groupTotal) + '</span>';
+    title.innerHTML = '<span>' + group.title + '<span style="display:block;font-size:10px;color:var(--muted);font-weight:400;margin-top:2px;">Изготовление без покраски</span></span><span class="sum">' + formatRub(groupTotal) + '</span>';
     groupBlock.appendChild(title);
 
     const body = document.createElement('div');
