@@ -340,7 +340,7 @@ function classifyMaterial(str) {
   if (n.includes('BALUSTER'))      return 's1_baluster';
   if (n.includes('POST'))          return 's1_posts';
   if (n.includes('BEGIN_WALL'))    return 'wall';
-  if (n.includes('BEGIN_OPENING')) return 's1_covering';
+  if (n.includes('BEGIN_OPENING')) return 'opening';
   if (n.includes('PARKETT'))       return 'floor';
   if (n.includes('ASH'))           return 'floor';
   if (n.includes('OBJECT3D'))      return 'floor';
@@ -556,6 +556,19 @@ function parseBOM(xmlText) {
   const q = (sel) => xml.querySelector(sel);
   const txt = (sel) => { const n = q(sel); return n ? n.textContent.trim() : null; };
   const num = (sel) => { const v = txt(sel); return v != null ? parseFloat(v) : null; };
+  const textList = (sel) => {
+    const v = txt(sel);
+    return v ? v.split('/').map(s => s.trim()).filter(Boolean) : [];
+  };
+  const numList = (sel) => textList(sel)
+    .map(s => parseFloat(s.replace(',', '.')))
+    .filter(Number.isFinite);
+
+  const riseList = numList('rise');
+  const goingList = numList('going');
+  const numRisersList = numList('numberofrisers');
+  const pitchList = textList('pitch');
+  const recalcGoingList = numList('recalculatedgoing');
 
   result.params = {
     ceiling:       num('ceiling'),
@@ -568,6 +581,15 @@ function parseBOM(xmlText) {
     numRisers:     num('numberofrisers'),
     widths:        num('widths'),
     pitch:         txt('pitch'),
+    riseList:      riseList,
+    goingList:     goingList,
+    numRisersList: numRisersList,
+    pitchList:     pitchList,
+    recalcGoingList: recalcGoingList,
+    flightCount:   Math.max(goingList.length, numRisersList.length, pitchList.length, 1),
+    numRisersTotal: numRisersList.reduce((sum, n) => sum + n, 0),
+    hasLanding:    false,
+    landingDepth:  recalcGoingList.length >= 3 ? recalcGoingList[1] : null,
     railingHeight: txt('railing > height'),
     handrailDim:   txt('handrail > dim'),
     balusterDim:   txt('baluster > dim'),
@@ -580,7 +602,9 @@ function parseBOM(xmlText) {
     const nameAttr = d.getAttribute('name') || '';
     const typeNode = d.querySelector('type');
     const typeId = typeNode ? typeNode.getAttribute('id') : '';
+    const typeExtra = typeNode ? (typeNode.getAttribute('extra') || '') : '';
     if (!typeId || typeId === 'Bolt') return;
+    if (String(typeExtra).toLowerCase() === 'landing') result.params.hasLanding = true;
 
     const dim = d.querySelector('dim');
     if (!dim) return;
@@ -899,6 +923,7 @@ function loadCollada(url, fileName) {
 
       currentModel = model;
       scene.add(currentModel);
+      splitSharedGroupsByLevel();
 
       applyGlassWalls();
       setHumanHeight(humanHeight);
@@ -1003,6 +1028,14 @@ function getModelFocusBox() {
     return new THREE.Box3().setFromObject(currentModel);
   }
   return box;
+}
+
+function centerCameraTarget() {
+  if (!currentModel) return;
+  const box = getModelFocusBox();
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  controls.target.copy(sphere.center);
+  controls.update();
 }
 
 function fitCamera() {
@@ -1497,6 +1530,69 @@ document.querySelectorAll('.acc-header').forEach((h) => {
   h.addEventListener('click', () => h.parentElement.classList.toggle('open'));
 });
 
+function montageMeshMinY(obj) {
+  try {
+    obj.updateWorldMatrix(true, false);
+    if (!obj.geometry.boundingBox) obj.geometry.computeBoundingBox();
+    const bb = obj.geometry.boundingBox;
+    if (!bb) return null;
+    let minY = Infinity;
+    for (const x of [bb.min.x, bb.max.x]) {
+      for (const y of [bb.min.y, bb.max.y]) {
+        for (const z of [bb.min.z, bb.max.z]) {
+          const v = new THREE.Vector3(x, y, z);
+          obj.localToWorld(v);
+          if (v.y < minY) minY = v.y;
+        }
+      }
+    }
+    return minY;
+  } catch {
+    return null;
+  }
+}
+
+/* DAE не содержит этажей в именах мешей: все столбы/поручни/балясины
+   попадают в s1_*. Разделяем их по высоте: элементы, начинающиеся
+   на уровне ограждения этажа, переносим в rN_*. */
+function splitSharedGroupsByLevel() {
+  const levels = [];
+  for (const key in elementGroups) {
+    const match = key.match(/^r(\d+)_(bottomrail|handrail|posts|baluster)$/);
+    if (!match) continue;
+    const arr = elementGroups[key] || [];
+    if (!arr.length) continue;
+    const ys = arr.map(montageMeshMinY).filter(Number.isFinite);
+    if (!ys.length) continue;
+    levels.push({ floor: Number(match[1]), y: Math.min(...ys) });
+  }
+  if (!levels.length) return;
+  levels.sort((a, b) => a.y - b.y);
+
+  for (const level of levels) {
+    const sourceFloor = level.floor - 1;
+    if (sourceFloor < 1) continue;
+    for (const cat of ['posts', 'handrail', 'baluster']) {
+      const sourceKey = 's' + sourceFloor + '_' + cat;
+      const source = elementGroups[sourceKey];
+      if (!source || !source.length) continue;
+      const remaining = [];
+      for (const obj of source) {
+        const y = montageMeshMinY(obj);
+        if (y == null) { remaining.push(obj); continue; }
+        if (y >= level.y - 0.1 && level.floor > sourceFloor) {
+          const targetKey = 'r' + level.floor + '_' + cat;
+          if (!elementGroups[targetKey]) elementGroups[targetKey] = [];
+          elementGroups[targetKey].push(obj);
+        } else {
+          remaining.push(obj);
+        }
+      }
+      elementGroups[sourceKey] = remaining;
+    }
+  }
+}
+
 function applyElementVisibility() {
   const replacing = selectedBaluster !== 'original';
 
@@ -1870,6 +1966,7 @@ floatRotationSlider.addEventListener('input', (e) => {
 /* ---------- Камера / прочее ---------- */
 document.getElementById('btnFit').addEventListener('click', fitCamera);
 document.getElementById('btnRotate').addEventListener('click', (e) => {
+  if (!controls.autoRotate) centerCameraTarget();
   controls.autoRotate = !controls.autoRotate;
   e.currentTarget.classList.toggle('active', controls.autoRotate);
 });
@@ -4265,6 +4362,219 @@ function buildPriceModal() {
   }
 }
 
+function priceQuantityForCategory(cat, items) {
+  let qty = 0;
+  if (cat.method === 'm2') {
+    items.forEach(d => { qty += (d.W * d.L) / 1e6; });
+    qty *= cat.coef || 1;
+  } else if (cat.method === 'length') {
+    const extra = (cat.extra_mm || 0) / 1000;
+    items.forEach(d => { qty += d.L / 1000 + extra; });
+  } else if (cat.method === 'count') {
+    qty = items.length;
+  }
+  return qty;
+}
+
+function createGeneratedCategory(draft, catKey) {
+  if (draft.categories[catKey]) return draft.categories[catKey];
+  const defaults = {
+    bottomrail: { name: 'Подбалясенник', method: 'm2', coef: 1, prices: { pine: 0, beech: 0, ash: 0, oak: 0 } },
+    post_caps: { name: 'Заглушки столбов', method: 'count', prices: { pine: 0, beech: 0, ash: 0, oak: 0 } }
+  };
+  const cat = defaults[catKey] || { name: catKey, method: 'count', prices: { pine: 0, beech: 0, ash: 0, oak: 0 } };
+  draft.categories[catKey] = JSON.parse(JSON.stringify(cat));
+  return draft.categories[catKey];
+}
+
+function priceResultWith(data) {
+  const old = priceData;
+  priceData = data;
+  const result = calculatePrice(currentKm);
+  priceData = old;
+  return result;
+}
+
+function fillMissingMaterialPrices(draft) {
+  const woodKeys = ['pine', 'beech', 'ash', 'oak'];
+  const reference = { bottomrail: 'handrail', post_caps: 'posts' };
+  for (const catKey in draft.categories) {
+    const cat = draft.categories[catKey];
+    if (!cat || !cat.prices) continue;
+    const baseMat = getMaterialForKey(catKey);
+    const basePrice = Number(cat.prices[baseMat]) || 0;
+    if (!basePrice) continue;
+    const refCat = reference[catKey] ? draft.categories[reference[catKey]] : null;
+    for (const wood of woodKeys) {
+      if (Number(cat.prices[wood]) > 0) continue;
+      let ratio = 1;
+      if (refCat && refCat.prices) {
+        const refBase = Number(refCat.prices[baseMat]) || 0;
+        const refWood = Number(refCat.prices[wood]) || 0;
+        if (refBase > 0 && refWood > 0) ratio = refWood / refBase;
+      } else {
+        const origCat = priceData && priceData.categories ? priceData.categories[catKey] : null;
+        const origBase = origCat && origCat.prices ? Number(origCat.prices[baseMat]) || 0 : 0;
+        const origWood = origCat && origCat.prices ? Number(origCat.prices[wood]) || 0 : 0;
+        if (origBase > 0 && origWood > 0) ratio = origWood / origBase;
+      }
+      cat.prices[wood] = Math.round(basePrice * ratio);
+    }
+  }
+
+  const bal = draft.categories.baluster;
+  if (bal && bal.prices) {
+    const baseMat = getMaterialForKey('baluster');
+    const basePrice = Number(bal.prices[baseMat]) || 0;
+    for (const size in draft.baluster_prices) {
+      const row = draft.baluster_prices[size] || {};
+      const sizeBase = Number(row[baseMat]) || basePrice;
+      for (const wood of woodKeys) {
+        if (Number(row[wood]) > 0) continue;
+        const ratio = basePrice > 0 && Number(bal.prices[wood]) > 0
+          ? Number(bal.prices[wood]) / basePrice
+          : 1;
+        row[wood] = Math.round(sizeBase * ratio);
+      }
+    }
+  }
+}
+
+async function generatePriceDraft() {
+  if (!priceData || !bomGroups || !bomGroups.length) return null;
+  if (!dxfLoadPromise) {
+    showToast('Подготовка DXF для расчёта…', true);
+    await loadAllDXF();
+  } else {
+    await dxfLoadPromise;
+  }
+  const tech = calculateTechCard();
+  if (!tech) return null;
+  const draft = JSON.parse(JSON.stringify(priceData));
+  draft.baluster_prices = draft.baluster_prices || { 680: {}, 860: {}, 930: {} };
+  const acc = {};
+  const balusterAcc = {};
+  const techGroupByFile = new Map();
+  tech.groups.forEach(g => techGroupByFile.set(g.file + ':' + g.section, g));
+
+  for (const group of bomGroups) {
+    const classified = classifyBOMItems(group.items, group.floor);
+    for (const section of ['stair', 'railing']) {
+      const prefix = section === 'stair' ? 's' + group.floor : 'r' + (group.floor + 1);
+      const categoryMap = section === 'stair' ? classified.stair : classified.railing;
+      const techGroup = techGroupByFile.get(group.file + ':' + section);
+      if (!techGroup) continue;
+      for (const techCat of techGroup.categories) {
+        const catKey = techCat.key;
+        const items = categoryMap[catKey];
+        if (!items || !items.length) continue;
+        if (!isElementIncluded(prefix + '_' + catKey)) continue;
+        const cat = createGeneratedCategory(draft, catKey);
+        const qty = priceQuantityForCategory(cat, items);
+        if (!qty) continue;
+        const wood = techCat.wood && techCat.wood.key ? techCat.wood.key : getMaterialForKey(catKey);
+        if (!acc[catKey]) acc[catKey] = {};
+        if (!acc[catKey][wood]) acc[catKey][wood] = { prod: 0, qty: 0 };
+        acc[catKey][wood].prod += techCat.productionPrice;
+        acc[catKey][wood].qty += qty;
+        if (catKey === 'baluster') {
+          const size = techGroup.balusterSize || '930';
+          if (!balusterAcc[size]) balusterAcc[size] = {};
+          if (!balusterAcc[size][wood]) balusterAcc[size][wood] = { prod: 0, count: 0 };
+          balusterAcc[size][wood].prod += techCat.productionPrice;
+          balusterAcc[size][wood].count += items.length;
+        }
+      }
+    }
+  }
+
+  for (const catKey in acc) {
+    const cat = createGeneratedCategory(draft, catKey);
+    if (!cat.prices) cat.prices = {};
+    for (const wood in acc[catKey]) {
+      const item = acc[catKey][wood];
+      if (item.qty > 0) cat.prices[wood] = Math.round(item.prod / item.qty);
+    }
+  }
+  for (const size in balusterAcc) {
+    if (!draft.baluster_prices[size]) draft.baluster_prices[size] = {};
+    for (const wood in balusterAcc[size]) {
+      const item = balusterAcc[size][wood];
+      if (item.count > 0) draft.baluster_prices[size][wood] = Math.round(item.prod / item.count);
+    }
+  }
+
+  const oldResult = calculatePrice(currentKm);
+  const draftResultBeforeScale = priceResultWith(draft);
+  const fixedNew = draftResultBeforeScale.paintTotal + draftResultBeforeScale.montageCost + draftResultBeforeScale.deliveryCost;
+  const targetMaterial = Math.max(0, oldResult.total - fixedNew);
+  const scale = draftResultBeforeScale.materialTotal > 0 && targetMaterial > 0
+    ? targetMaterial / draftResultBeforeScale.materialTotal
+    : 1;
+  if (Math.abs(scale - 1) > 0.0001) {
+    for (const catKey in draft.categories) {
+      const cat = draft.categories[catKey];
+      if (!cat.prices) continue;
+      for (const wood in cat.prices) {
+        if (typeof cat.prices[wood] === 'number' && cat.prices[wood] > 0) {
+          cat.prices[wood] = Math.round(cat.prices[wood] * scale);
+        }
+      }
+    }
+    for (const size in draft.baluster_prices) {
+      for (const wood in draft.baluster_prices[size]) {
+        if (typeof draft.baluster_prices[size][wood] === 'number' && draft.baluster_prices[size][wood] > 0) {
+          draft.baluster_prices[size][wood] = Math.round(draft.baluster_prices[size][wood] * scale);
+        }
+      }
+    }
+  }
+
+  fillMissingMaterialPrices(draft);
+
+  return {
+    draft: draft,
+    oldResult: oldResult,
+    draftResult: priceResultWith(draft),
+    scale: scale
+  };
+}
+
+async function applyGeneratedPrice() {
+  const generated = await generatePriceDraft();
+  if (!generated) {
+    showToast('Нет данных для пересчёта цены', true);
+    return;
+  }
+  const oldTotal = generated.oldResult.total;
+  const newTotal = generated.draftResult.total;
+  if (!confirm('Пересчитать клиентскую цену?\n\nБыло: ' + formatRub(oldTotal) + '\nСтанет: ' + formatRub(newTotal) + '\n\nИтог сохраняется, меняется распределение по категориям.')) return;
+  try {
+    const res = await fetch('/api/projects/' + encodeURIComponent(window.PROJECT_ID) + '/price', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(generated.draft)
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    showToast('Клиентская цена пересчитана', true);
+    setTimeout(() => location.reload(), 700);
+  } catch (err) {
+    showToast('Не удалось сохранить цену: ' + err.message, true);
+  }
+}
+
+function setupGeneratePriceButton() {
+  if (!window.INTERNAL_MODE || !window.PROJECT_ID) return;
+  const priceBtn = document.getElementById('btnPrice');
+  if (!priceBtn || document.getElementById('btnGeneratePrice')) return;
+  const btn = document.createElement('button');
+  btn.className = 'btn big';
+  btn.id = 'btnGeneratePrice';
+  btn.innerHTML = '<span class="ico">🧮</span> Пересчитать клиентскую цену';
+  btn.addEventListener('click', applyGeneratedPrice);
+  priceBtn.parentElement.insertBefore(btn, priceBtn.nextSibling);
+}
+
 async function buildClientPriceModal() {
   if (!bomGroups || !bomGroups.length) {
     priceBody.innerHTML = '<div class="price-empty">XML-файлы StairCon не найдены.</div>';
@@ -4408,7 +4718,7 @@ async function buildClientPriceModal() {
 
   priceBody.appendChild(totals);
 
-  if (result.montageBlock) {
+  if (window.INTERNAL_MODE && result.montageBlock) {
     const mb = result.montageBlock;
     const details = document.createElement('details');
     details.className = 'price-client-note';
@@ -4517,17 +4827,39 @@ function buildParamsModal() {
     row('Просвет под перекрытием', mm(p.headroom));
 
     row('Ступени', null, true);
-    row('Высота ступени', mm(p.rise));
-    row('Глубина ступени', p.going ? p.going.toFixed(1) + ' мм' : null);
-    if (p.recalcGoing) row('Глубина (забежные)', p.recalcGoing + ' мм');
-    row('Количество подъёмов', p.numRisers);
+    const flightCount = Number(p.flightCount) || 1;
+    const uniqueNums = (values, digits = 1) => {
+      const list = (values || []).map(v => Number(v).toFixed(digits));
+      const uniq = Array.from(new Set(list));
+      return uniq.length ? uniq.join(' / ') : null;
+    };
+    if (flightCount > 1) {
+      row('Маршей', flightCount);
+      const risers = p.numRisersList || [];
+      row('Подъёмов по маршам', risers.length
+        ? risers.map(n => Math.round(n)).join(' / ')
+        : null);
+      row('Высота ступени', p.riseList && p.riseList.length ? uniqueNums(p.riseList) + ' мм' : mm(p.rise));
+      row('Глубина ступени', p.goingList && p.goingList.length ? uniqueNums(p.goingList) + ' мм' : (p.going ? p.going.toFixed(1) + ' мм' : null));
+      row('Угол наклона', p.pitchList && p.pitchList.length ? p.pitchList.join(' / ') : p.pitch);
+    } else {
+      row('Высота ступени', mm(p.rise));
+      row('Глубина ступени', p.going ? p.going.toFixed(1) + ' мм' : null);
+      row('Количество подъёмов', p.numRisers);
+      row('Угол наклона', p.pitch);
+    }
     row('Ширина марша', mm(p.widths));
-    row('Угол наклона', p.pitch);
+    if (p.hasLanding) {
+      row('Площадка', p.landingDepth ? Math.round(p.landingDepth) + ' мм' : 'есть');
+    } else if (p.recalcGoingList && p.recalcGoingList.length > 1) {
+      row('Расчётная глубина', p.recalcGoingList.map(v => Math.round(v)).join(' / ') + ' мм');
+    }
 
     row('Ограждение и элементы', null, true);
-    row('Высота ограждения', p.railingHeight);
-    row('Сечение поручня', p.handrailDim);
-    row('Диаметр балясины', p.balusterDim);
+    row('Высота ограждения', p.railingHeight ? p.railingHeight + ' мм' : null);
+    row('Сечение поручня', p.handrailDim ? p.handrailDim.replace(/x/gi, ' × ') + ' мм' : null);
+    row('Балясина', '45 мм (стандарт)');
+    row('Посадочное место балясины', p.balusterDim ? p.balusterDim.replace('⌀', 'Ø') + ' мм' : null);
     row('Сечение столба', p.newelName);
     return;
   }
@@ -4618,12 +4950,33 @@ function buildOrderModal() {
     const push = (label, val) => { if (val) rows.push('<div class="param-row"><span class="label">' + label + '</span><span class="value">' + val + '</span></div>'); };
 
     if (p.floorheight)  push('Высота этажа',     Math.round(p.floorheight) + ' мм');
-    if (p.rise)         push('Высота ступени',   Math.round(p.rise) + ' мм');
-    if (p.going)        push('Глубина ступени',  p.going.toFixed(1) + ' мм');
+    if (p.flightCount > 1) {
+      push('Маршей', p.flightCount);
+      if (p.numRisersList && p.numRisersList.length) {
+        push('Подъёмов по маршам', p.numRisersList.map(n => Math.round(n)).join(' / '));
+      }
+      if (p.riseList && p.riseList.length) {
+        const uniq = Array.from(new Set(p.riseList.map(v => Number(v).toFixed(1))));
+        push('Высота ступени', uniq.join(' / ') + ' мм');
+      }
+      if (p.goingList && p.goingList.length) {
+        push('Глубина ступени', p.goingList.map(v => Number(v).toFixed(1)).join(' / ') + ' мм');
+      }
+      if (p.pitchList && p.pitchList.length) push('Угол наклона', p.pitchList.join(' / '));
+    } else {
+      if (p.rise)      push('Высота ступени',   Math.round(p.rise) + ' мм');
+      if (p.going)     push('Глубина ступени',  p.going.toFixed(1) + ' мм');
+      if (p.numRisers) push('Количество подъёмов', p.numRisers);
+      if (p.pitch)     push('Угол наклона',     p.pitch);
+    }
     if (p.widths)       push('Ширина марша',     Math.round(p.widths) + ' мм');
-    if (p.numRisers)    push('Количество подъёмов', p.numRisers);
-    if (p.pitch)        push('Угол наклона',     p.pitch);
-    if (p.railingHeight) push('Высота ограждения', p.railingHeight);
+    if (p.hasLanding)   push('Площадка',         p.landingDepth ? Math.round(p.landingDepth) + ' мм' : 'есть');
+    else if (p.recalcGoingList && p.recalcGoingList.length > 1) {
+      push('Расчётная глубина', p.recalcGoingList.map(v => Math.round(v)).join(' / ') + ' мм');
+    }
+    if (p.railingHeight) push('Высота ограждения', p.railingHeight + ' мм');
+    push('Балясина', '45 мм (стандарт)');
+    if (p.balusterDim) push('Посадочное место балясины', p.balusterDim.replace('⌀', 'Ø') + ' мм');
 
     if (rows.length) {
       const paramsSec = document.createElement('div');
@@ -4852,6 +5205,7 @@ const techCardModal = makeModal('techCardOverlay', 'techCardCloseBtn', 'techCard
 const drawingsModal = makeModal('drawingsModalOverlay', 'drawingsModalCloseBtn', 'drawingsModalClose', buildDrawingsModal);
 
 priceBtn.addEventListener('click', priceModal.openFn);
+setupGeneratePriceButton();
 document.getElementById('btnParams').addEventListener('click', paramsModal.openFn);
 document.getElementById('btnDrawings').addEventListener('click', drawingsModal.openFn);
 document.getElementById('btnOrder').addEventListener('click', orderModal.openFn);
