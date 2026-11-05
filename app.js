@@ -1621,8 +1621,8 @@ function splitSharedGroupsByLevel() {
 
   /* Части одной балясины могут быть отдельными мешами. Если один меш
      уже отнесён к ограждению этажа, переносим и совпадающие с ним
-     по X/Z части, а также ближайшие к ограждению балясины на стыке.
-     Иначе при скрытии ограждения остаётся «лишняя» балясина на марше. */
+     по X/Z части. Иначе при скрытии ограждения остаётся «лишняя»
+     половина балясины на марше. */
   for (const level of levels) {
     const sourceFloor = level.floor - 1;
     if (sourceFloor < 1) continue;
@@ -1639,17 +1639,12 @@ function splitSharedGroupsByLevel() {
     for (const obj of source) {
       const box = montageMeshCenterXZ(obj);
       const paired = box && targetBoxes.some((t) =>
-        Math.hypot(t.x - box.x, t.z - box.z) <= 0.22 &&
+        Math.hypot(t.x - box.x, t.z - box.z) <= 0.05 &&
         box.maxY >= t.minY - 0.1 &&
         box.minY <= t.maxY + 0.1
       );
-      if (paired) {
-        obj.userData = obj.userData || {};
-        obj.userData.junctionGroup = sourceKey;
-        target.push(obj);
-      } else {
-        remaining.push(obj);
-      }
+      if (paired) target.push(obj);
+      else remaining.push(obj);
     }
     elementGroups[sourceKey] = remaining;
   }
@@ -1659,10 +1654,9 @@ function applyElementVisibility() {
   const replacing = selectedBaluster !== 'original';
 
   for (const key in elementGroups) {
+    const visible = isElementVisible(key);
     const isBalusterGroup = key.endsWith('_baluster');
     elementGroups[key].forEach((obj) => {
-      const junctionGroup = obj.userData && obj.userData.junctionGroup;
-      const visible = isElementVisible(key) && (!junctionGroup || isElementVisible(junctionGroup));
       // В режиме замены исходные балясины (и точёные части, и хвостовики)
       // всегда скрыты — иначе появляется вторая балясина.
       obj.visible = (replacing && isBalusterGroup) ? false : visible;
