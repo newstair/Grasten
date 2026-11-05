@@ -1643,8 +1643,13 @@ function splitSharedGroupsByLevel() {
         box.maxY >= t.minY - 0.1 &&
         box.minY <= t.maxY + 0.1
       );
-      if (paired) target.push(obj);
-      else remaining.push(obj);
+      if (paired) {
+        obj.userData = obj.userData || {};
+        obj.userData.junctionGroup = sourceKey;
+        target.push(obj);
+      } else {
+        remaining.push(obj);
+      }
     }
     elementGroups[sourceKey] = remaining;
   }
@@ -1654,9 +1659,10 @@ function applyElementVisibility() {
   const replacing = selectedBaluster !== 'original';
 
   for (const key in elementGroups) {
-    const visible = isElementVisible(key);
     const isBalusterGroup = key.endsWith('_baluster');
     elementGroups[key].forEach((obj) => {
+      const junctionGroup = obj.userData && obj.userData.junctionGroup;
+      const visible = isElementVisible(key) && (!junctionGroup || isElementVisible(junctionGroup));
       // В режиме замены исходные балясины (и точёные части, и хвостовики)
       // всегда скрыты — иначе появляется вторая балясина.
       obj.visible = (replacing && isBalusterGroup) ? false : visible;
