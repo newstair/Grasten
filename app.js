@@ -1552,6 +1552,31 @@ function montageMeshMinY(obj) {
   }
 }
 
+function montageMeshCenterXZ(obj) {
+  try {
+    obj.updateWorldMatrix(true, false);
+    if (!obj.geometry.boundingBox) obj.geometry.computeBoundingBox();
+    const bb = obj.geometry.boundingBox;
+    if (!bb) return null;
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const x of [bb.min.x, bb.max.x]) {
+      for (const y of [bb.min.y, bb.max.y]) {
+        for (const z of [bb.min.z, bb.max.z]) {
+          const v = new THREE.Vector3(x, y, z);
+          obj.localToWorld(v);
+          if (v.x < minX) minX = v.x;
+          if (v.x > maxX) maxX = v.x;
+          if (v.z < minZ) minZ = v.z;
+          if (v.z > maxZ) maxZ = v.z;
+        }
+      }
+    }
+    return { x: (minX + maxX) / 2, z: (minZ + maxZ) / 2 };
+  } catch {
+    return null;
+  }
+}
+
 /* DAE не содержит этажей в именах мешей: все столбы/поручни/балясины
    попадают в s1_*. Разделяем их по высоте: элементы, начинающиеся
    на уровне ограждения этажа, переносим в rN_*. */
@@ -1590,6 +1615,34 @@ function splitSharedGroupsByLevel() {
       }
       elementGroups[sourceKey] = remaining;
     }
+  }
+
+  /* Части одной балясины могут быть отдельными мешами. Если один меш
+     уже отнесён к ограждению этажа, переносим и совпадающие с ним
+     по X/Z части, иначе при скрытии ограждения остаётся «лишняя»
+     балясина на марше. */
+  for (const level of levels) {
+    const sourceFloor = level.floor - 1;
+    if (sourceFloor < 1) continue;
+    const sourceKey = 's' + sourceFloor + '_baluster';
+    const targetKey = 'r' + level.floor + '_baluster';
+    const source = elementGroups[sourceKey];
+    const target = elementGroups[targetKey];
+    if (!source || !source.length || !target || !target.length) continue;
+
+    const targetCenters = target.map(montageMeshCenterXZ).filter(Boolean);
+    if (!targetCenters.length) continue;
+
+    const remaining = [];
+    for (const obj of source) {
+      const center = montageMeshCenterXZ(obj);
+      const paired = center && targetCenters.some((t) =>
+        Math.hypot(t.x - center.x, t.z - center.z) <= 0.05
+      );
+      if (paired) target.push(obj);
+      else remaining.push(obj);
+    }
+    elementGroups[sourceKey] = remaining;
   }
 }
 
