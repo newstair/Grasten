@@ -924,6 +924,7 @@ function loadCollada(url, fileName) {
       currentModel = model;
       scene.add(currentModel);
       splitSharedGroupsByLevel();
+      classifyBalustersByHandrail();
 
       applyGlassWalls();
       setHumanHeight(humanHeight);
@@ -1579,6 +1580,38 @@ function montageMeshCenterXZ(obj) {
   }
 }
 
+function montageMeshBounds(obj) {
+  try {
+    obj.updateWorldMatrix(true, false);
+    if (!obj.geometry.boundingBox) obj.geometry.computeBoundingBox();
+    const bb = obj.geometry.boundingBox;
+    if (!bb) return null;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const x of [bb.min.x, bb.max.x]) {
+      for (const y of [bb.min.y, bb.max.y]) {
+        for (const z of [bb.min.z, bb.max.z]) {
+          const v = new THREE.Vector3(x, y, z);
+          obj.localToWorld(v);
+          if (v.x < minX) minX = v.x;
+          if (v.x > maxX) maxX = v.x;
+          if (v.y < minY) minY = v.y;
+          if (v.y > maxY) maxY = v.y;
+          if (v.z < minZ) minZ = v.z;
+          if (v.z > maxZ) maxZ = v.z;
+        }
+      }
+    }
+    return {
+      minX, maxX, minY, maxY, minZ, maxZ,
+      cx: (minX + maxX) / 2,
+      cy: (minY + maxY) / 2,
+      cz: (minZ + maxZ) / 2
+    };
+  } catch {
+    return null;
+  }
+}
+
 /* DAE не содержит этажей в именах мешей: все столбы/поручни/балясины
    попадают в s1_*. Разделяем их по высоте: элементы, начинающиеся
    на уровне ограждения этажа, переносим в rN_*. */
@@ -1647,6 +1680,90 @@ function splitSharedGroupsByLevel() {
       else remaining.push(obj);
     }
     elementGroups[sourceKey] = remaining;
+  }
+}
+
+/* Правило клиента: балясина относится к тому ограждению, с поручнем
+   которого она сопрягается. Наклонный поручень — лестница (s*),
+   горизонтальный — ограждение этажа (r*). Высота балясины не важна. */
+function classifyBalustersByHandrail() {
+  const handrails = [];
+  for (const key in elementGroups) {
+    if (!key.endsWith('_handrail')) continue;
+    for (const obj of elementGroups[key] || []) {
+      const b = montageMeshBounds(obj);
+      if (!b) continue;
+      const span = Math.max(b.maxX - b.minX, b.maxZ - b.minZ);
+      if (span < 0.25) continue;
+      handrails.push({ key, b, dx: b.maxX - b.minX, dz: b.maxZ - b.minZ });
+    }
+  }
+  if (!handrails.length) return;
+
+  const balusters = [];
+  for (const key in elementGroups) {
+    if (!key.endsWith('_baluster')) continue;
+    for (const obj of elementGroups[key] || []) {
+      const b = montageMeshBounds(obj);
+      if (!b) continue;
+      const verts = obj.geometry && obj.geometry.attributes && obj.geometry.attributes.position
+        ? obj.geometry.attributes.position.count
+        : 0;
+      balusters.push({ key, obj, b, verts });
+    }
+  }
+  if (!balusters.length) return;
+
+  /* Точёная часть и хвостовик одной балясины — отдельные меши.
+     Объединяем их в кластер по X/Z и классифицируем по детальной части. */
+  const clusters = [];
+  for (const item of balusters) {
+    let cluster = clusters.find((c) =>
+      Math.hypot(c.cx - item.b.cx, c.cz - item.b.cz) <= 0.06 &&
+      Math.abs(c.cy - item.b.cy) <= 0.3
+    );
+    if (!cluster) {
+      cluster = { cx: item.b.cx, cz: item.b.cz, cy: item.b.cy, items: [] };
+      clusters.push(cluster);
+    }
+    cluster.items.push(item);
+  }
+
+  for (const key in elementGroups) {
+    if (key.endsWith('_baluster')) elementGroups[key] = [];
+  }
+
+  for (const cluster of clusters) {
+    const rep = cluster.items.reduce((a, b) => a.verts >= b.verts ? a : b);
+    let best = null;
+    for (const h of handrails) {
+      const dx = Math.max(h.b.minX - rep.b.cx, 0, rep.b.cx - h.b.maxX);
+      const dz = Math.max(h.b.minZ - rep.b.cz, 0, rep.b.cz - h.b.maxZ);
+      const dist = Math.hypot(dx, dz);
+      if (dist > 0.08) continue;
+
+      const useX = h.dx >= h.dz;
+      const t = useX
+        ? (rep.b.cx - h.b.minX) / Math.max(h.dx, 1e-6)
+        : (rep.b.cz - h.b.minZ) / Math.max(h.dz, 1e-6);
+      const railY = h.b.minY + Math.max(0, Math.min(1, t)) * (h.b.maxY - h.b.minY);
+      const gap = railY - rep.b.maxY;
+      if (gap < -0.15 || gap > 0.45) continue;
+      const score = gap + dist * 0.5;
+      if (!best || score < best.score) best = { key: h.key, score };
+    }
+
+    if (!best) {
+      for (const item of cluster.items) {
+        if (!elementGroups[item.key]) elementGroups[item.key] = [];
+        elementGroups[item.key].push(item.obj);
+      }
+      continue;
+    }
+
+    const targetKey = best.key.replace('_handrail', '_baluster');
+    if (!elementGroups[targetKey]) elementGroups[targetKey] = [];
+    for (const item of cluster.items) elementGroups[targetKey].push(item.obj);
   }
 }
 
