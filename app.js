@@ -19,6 +19,13 @@ const TEXTURE_LIST = [
   { file: 'con_oak.bmp',  name: 'Дуб' }
 ];
 
+const MATERIAL_TEXTURES = {
+  pine:  { file: 'con_pine.bmp', name: 'Сосна' },
+  beech: { file: 'con_bok.bmp',  name: 'Бук' },
+  ash:   { file: 'con_ash.bmp',  name: 'Ясень' },
+  oak:   { file: 'con_oak.bmp',  name: 'Дуб' }
+};
+
 const FINISH_CATEGORIES = [
   { key: 'treads',          label: 'Ступени' },
   { key: 'risers',          label: 'Подступенки' },
@@ -251,7 +258,7 @@ const COLOR_PALETTE = [
   { key: 'clear',   name: 'Лак б/ц',        hex: '#ffffff' },
   { key: 'light',   name: 'Светлый дуб',    hex: '#e6d5b8' },
   { key: 'dark',    name: 'Тёмный орех',    hex: '#5c3a21' },
-  { key: 'redwood', name: 'Красное дерево', hex: '#8b1a1a' },
+  { key: 'redwood', name: 'Вишня', hex: '#8b1a1a' },
   { key: 'mocha',   name: 'Мокко',          hex: '#6f4e37' },
   { key: 'wenge',   name: 'Венге',          hex: '#3b2b2b' },
   { key: 'honey',   name: 'Медовый',        hex: '#d4a373' },
@@ -1267,6 +1274,7 @@ for (let i = 1; i <= 5; i++) {
   balusterLoader.load('baluster_' + i + '.glb', (gltf) => {
     balusterModels[i] = gltf.scene;
     console.log('%c✔ Загружена baluster_' + i + '.glb', 'color:#31d0aa');
+    if (currentModel && selectedBaluster === String(i)) replaceBalustersInScene();
   }, undefined, (err) => console.warn('Ошибка загрузки baluster_' + i + '.glb:', err));
 }
 humanLoader.load(HUMAN_FILE, (gltf) => {
@@ -1417,6 +1425,184 @@ function applyPendingHuman() {
   setHumanMode(false);
 }
 
+/* ---------- Состояние клиента в ссылке ---------- */
+const CLIENT_STATE_VERSION = 1;
+
+function materialKeyForTexture(file) {
+  if (!file) return null;
+  const mats = priceData && priceData.materials ? priceData.materials : {};
+  for (const key in mats) {
+    if ((mats[key].textures || []).indexOf(file) !== -1) return key;
+  }
+  for (const key in MATERIAL_TEXTURES) {
+    if (MATERIAL_TEXTURES[key].file === file) return key;
+  }
+  return null;
+}
+
+function textureForMaterialKey(key) {
+  if (!key) return null;
+  const mats = priceData && priceData.materials ? priceData.materials : {};
+  const mat = mats[key];
+  const file = mat && mat.textures && mat.textures[0]
+    ? mat.textures[0]
+    : (MATERIAL_TEXTURES[key] ? MATERIAL_TEXTURES[key].file : null);
+  if (!file) return null;
+  const entry = TEXTURE_LIST.find((item) => item.file === file);
+  const name = entry
+    ? entry.name
+    : (mat && mat.name ? mat.name : (MATERIAL_TEXTURES[key] ? MATERIAL_TEXTURES[key].name : key));
+  return { file, name };
+}
+
+function buildClientState() {
+  const state = { v: CLIENT_STATE_VERSION };
+
+  const finish = {};
+  for (const cat of FINISH_CATEGORIES) {
+    const choice = currentFinish[cat.key];
+    if (!choice || !choice.file) continue;
+    const key = materialKeyForTexture(choice.file);
+    if (key) finish[cat.key] = key;
+  }
+  if (Object.keys(finish).length) state.finish = finish;
+
+  const color = {};
+  for (const cat of FINISH_CATEGORIES) {
+    const key = currentColor[cat.key];
+    if (key) color[cat.key] = key;
+  }
+  if (Object.keys(color).length) state.color = color;
+
+  if (selectedBaluster !== 'original') state.baluster = selectedBaluster;
+
+  const blocks = {};
+  for (const key in blockIncluded) {
+    if (blockIncluded[key] === false) blocks[key] = false;
+  }
+  if (Object.keys(blocks).length) state.blocks = blocks;
+
+  const included = {};
+  for (const key in elementIncluded) {
+    if (elementIncluded[key] === false) included[key] = false;
+  }
+  if (Object.keys(included).length) state.included = included;
+
+  const visible = {};
+  for (const key in elementVisible) {
+    if (elementVisible[key] === false) visible[key] = false;
+  }
+  if (Object.keys(visible).length) state.visual = visible;
+
+  if (!paintEnabled) state.paint = false;
+  if (!deliveryEnabled) state.delivery = false;
+  if (!montageEnabled) state.montage = false;
+  if (!glassWalls) state.glass = false;
+
+  const bgInput = document.getElementById('bgColor');
+  if (bgInput && bgInput.value && bgInput.value.toLowerCase() !== '#0f1116') {
+    state.bg = bgInput.value.toLowerCase();
+  }
+
+  return state;
+}
+
+function hasClientState(state) {
+  return Object.keys(state).some((key) => key !== 'v');
+}
+
+function applyClientState(state) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return;
+
+  if (state.finish && typeof state.finish === 'object') {
+    for (const cat of FINISH_CATEGORIES) {
+      if (!Object.prototype.hasOwnProperty.call(state.finish, cat.key)) continue;
+      const key = state.finish[cat.key];
+      currentFinish[cat.key] = key ? textureForMaterialKey(String(key)) : null;
+    }
+  }
+
+  if (typeof state.paint === 'boolean') paintEnabled = state.paint;
+
+  if (state.color && typeof state.color === 'object') {
+    for (const cat of FINISH_CATEGORIES) {
+      if (!Object.prototype.hasOwnProperty.call(state.color, cat.key)) continue;
+      const key = state.color[cat.key];
+      if (key === null || key === '') {
+        currentColor[cat.key] = null;
+      } else if (COLOR_PALETTE.some((color) => color.key === key)) {
+        currentColor[cat.key] = key;
+      }
+    }
+  }
+
+  if (state.baluster !== undefined) {
+    const value = String(state.baluster);
+    if (value === 'original' || /^[1-5]$/.test(value)) selectedBaluster = value;
+  }
+
+  if (state.blocks && typeof state.blocks === 'object') {
+    for (const key in state.blocks) {
+      if (!/^[a-zA-Z0-9_]+$/.test(key)) continue;
+      if (state.blocks[key] === false) blockIncluded[key] = false;
+    }
+  }
+
+  if (state.included && typeof state.included === 'object') {
+    for (const key in state.included) {
+      if (!/^[a-zA-Z0-9_]+$/.test(key)) continue;
+      if (state.included[key] === false) elementIncluded[key] = false;
+    }
+  }
+
+  if (state.visual && typeof state.visual === 'object') {
+    for (const key in state.visual) {
+      if (!/^[a-zA-Z0-9_]+$/.test(key)) continue;
+      if (state.visual[key] === false) elementVisible[key] = false;
+    }
+  }
+
+  if (typeof state.glass === 'boolean') glassWalls = state.glass;
+  if (typeof state.delivery === 'boolean') deliveryEnabled = state.delivery;
+  if (typeof state.montage === 'boolean') montageEnabled = state.montage;
+  if (typeof techCardOptions === 'object') {
+    techCardOptions.paint = paintEnabled;
+    techCardOptions.montage = montageEnabled;
+  }
+
+  if (typeof state.bg === 'string' && /^#[0-9a-f]{6}$/i.test(state.bg)) {
+    const bgInput = document.getElementById('bgColor');
+    if (bgInput) bgInput.value = state.bg;
+    scene.background.set(state.bg);
+  }
+
+  for (const cat of FINISH_CATEGORIES) applyFinish(cat.key);
+  for (const cat of FINISH_CATEGORIES) applyColor(cat.key);
+
+  buildFinishPanel();
+  buildColorPanel();
+  buildBalusterPanel();
+  buildConfiguratorPanel();
+
+  if (selectedBaluster === 'original' || balusterModels[selectedBaluster]) {
+    replaceBalustersInScene();
+  }
+
+  applyElementVisibility();
+  applyGlassWalls();
+
+  const paintBtn = document.getElementById('btnGlobalPaint');
+  if (paintBtn) {
+    paintBtn.classList.toggle('active', paintEnabled);
+    paintBtn.textContent = paintEnabled ? 'Покраска включена' : 'Покраска отключена';
+  }
+
+  const priceOverlay = document.getElementById('priceModalOverlay');
+  if (priceOverlay && priceOverlay.classList.contains('show')) buildClientPriceModal();
+
+  updatePriceSummary();
+}
+
 function applyUrlState() {
   const params = new URLSearchParams(location.search);
   const cam = parseVec3(params.get('cam'));
@@ -1436,6 +1622,15 @@ function applyUrlState() {
     };
     if (humanTemplate) applyPendingHuman();
   }
+
+  const rawState = params.get('state');
+  if (rawState && rawState.length <= 20000) {
+    try {
+      applyClientState(JSON.parse(rawState));
+    } catch (error) {
+      console.warn('Не удалось применить состояние из ссылки:', error);
+    }
+  }
 }
 
 function buildShareUrl() {
@@ -1451,6 +1646,12 @@ function buildShareUrl() {
     params.delete('humanH');
     params.delete('humanR');
   }
+
+  ['finish', 'color', 'baluster', 'visible', 'paint', 'delivery', 'montage'].forEach((key) => params.delete(key));
+  const state = buildClientState();
+  if (hasClientState(state)) params.set('state', JSON.stringify(state));
+  else params.delete('state');
+
   return location.origin + location.pathname + '?' + params.toString();
 }
 
@@ -2162,7 +2363,7 @@ document.getElementById('btnShare').addEventListener('click', async () => {
   }
   try {
     await navigator.clipboard.writeText(url);
-    showToast('Ссылка с позицией и человечком скопирована', true);
+    showToast('Ссылка с настройками и позицией скопирована', true);
   } catch { prompt('Скопируйте ссылку вручную:', url); }
 });
 document.getElementById('bgColor').addEventListener('input', (e) => {
@@ -2206,7 +2407,7 @@ document.getElementById('btnSavePos').addEventListener('click', () => {
   const newUrl = buildShareUrl();
   history.replaceState(null, '', newUrl);
   navigator.clipboard.writeText(newUrl).then(() => {
-    showToast('Ссылка с позицией и человечком скопирована', true);
+    showToast('Ссылка с настройками и позицией скопирована', true);
   }).catch(() => prompt('Скопируйте ссылку вручную:', newUrl));
 });
 
@@ -2232,6 +2433,10 @@ function buildFinishPanel() {
     row.className = 'finish-row';
     row.dataset.key = cat.key;
 
+    const current = currentFinish[cat.key];
+    const currentFile = current && current.file ? current.file : '';
+    const currentName = currentFile && current && current.name ? current.name : 'Как в проекте';
+
     const header = document.createElement('div');
     header.className = 'finish-header';
     header.innerHTML =
@@ -2245,7 +2450,7 @@ function buildFinishPanel() {
     options.className = 'finish-options';
 
     const optOriginal = document.createElement('button');
-    optOriginal.className = 'finish-option selected';
+    optOriginal.className = 'finish-option' + (!currentFile ? ' selected' : '');
     optOriginal.dataset.file = '';
     optOriginal.dataset.name = 'Как в проекте';
     optOriginal.innerHTML = '<span class="swatch" style="background:#1a1d25;"></span>Как в проекте';
@@ -2253,7 +2458,7 @@ function buildFinishPanel() {
 
     TEXTURE_LIST.forEach((t) => {
       const opt = document.createElement('button');
-      opt.className = 'finish-option';
+      opt.className = 'finish-option' + (currentFile === t.file ? ' selected' : '');
       opt.dataset.file = t.file;
       opt.dataset.name = t.name;
       opt.innerHTML = '<span class="swatch" style="background-image:url(' + t.file + ');"></span>' + t.name;
@@ -2262,6 +2467,7 @@ function buildFinishPanel() {
 
     row.appendChild(header);
     row.appendChild(options);
+    row.querySelector('.finish-current').textContent = currentName;
 
     header.addEventListener('click', () => {
       const isOpen = row.classList.contains('open');
@@ -2849,6 +3055,9 @@ function buildColorPanel() {
     row.className = 'finish-row';
     row.dataset.key = cat.key;
 
+    const selectedKey = currentColor[cat.key];
+    const selectedColor = COLOR_PALETTE.find((color) => color.key === selectedKey);
+
     const header = document.createElement('div');
     header.className = 'finish-header';
     header.innerHTML =
@@ -2862,7 +3071,7 @@ function buildColorPanel() {
     options.className = 'color-options';
 
     const optOrig = document.createElement('div');
-    optOrig.className = 'color-swatch original';
+    optOrig.className = 'color-swatch original' + (!selectedKey ? ' selected' : '');
     optOrig.innerHTML = '✕';
     optOrig.title = 'Без тонировки';
     optOrig.addEventListener('click', () => {
@@ -2879,7 +3088,7 @@ function buildColorPanel() {
       if (color.name === 'Натуральный') return;
       
       const swatch = document.createElement('div');
-      swatch.className = 'color-swatch';
+      swatch.className = 'color-swatch' + (selectedKey === color.key ? ' selected' : '');
       swatch.style.background = color.hex;
       swatch.title = color.name;
       
@@ -2896,6 +3105,7 @@ function buildColorPanel() {
 
     row.appendChild(header);
     row.appendChild(options);
+    row.querySelector('.finish-current').textContent = selectedColor ? selectedColor.name : 'Без тонировки';
 
     header.addEventListener('click', () => {
       const isOpen = row.classList.contains('open');
@@ -2918,6 +3128,8 @@ function applyColor(categoryKey) {
   const colorKey = currentColor[categoryKey];
   const colorObj = COLOR_PALETTE.find(c => c.key === colorKey);
   const colorHex = colorObj ? colorObj.hex : null;
+  const finish = currentFinish[categoryKey];
+  const finishTexture = finish && finish.file ? getTexture(finish.file) : null;
 
   for (const groupKey in elementGroups) {
     if (!groupKey.endsWith('_' + categoryKey)) continue;
@@ -2930,7 +3142,10 @@ function applyColor(categoryKey) {
         if (!m) return;
         
         if (!paintEnabled || !colorKey) {
-          if (orig) {
+          if (finishTexture) {
+            m.map = finishTexture;
+            if (m.color) m.color.setHex(0xffffff);
+          } else if (orig) {
             m.map = hasUsableMap(orig.map) ? orig.map : null;
             if (m.color) m.color.setHex(orig.color);
           }
@@ -2938,7 +3153,10 @@ function applyColor(categoryKey) {
           if (m.isMeshPhongMaterial) m.shininess = 10;
         } else {
           if (colorKey === 'clear') {
-            if (orig && hasUsableMap(orig.map)) {
+            if (finishTexture) {
+              m.map = finishTexture;
+              if (m.color) m.color.setHex(0xffffff);
+            } else if (orig && hasUsableMap(orig.map)) {
               m.map = orig.map;
               if (m.color) m.color.setHex(0xffffff);
             } else {
@@ -3368,7 +3586,14 @@ function getTechDetailCoef(catKey, items) {
 function getTechPaintRecipe(catKey) {
   if (!paintEnabled) return null;
   const recipes = (productionPrices && productionPrices.paint_recipes) || {};
+  const recipeMap = (productionPrices && productionPrices.paint_recipe_map) || {};
   let key = (currentColor && (currentColor[catKey] || currentColor.treads || currentColor.baluster)) || 'clear';
+
+  if (Object.prototype.hasOwnProperty.call(recipeMap, key)) {
+    const mapped = recipeMap[key];
+    if (mapped == null) return null;
+    if (recipes[mapped]) return { key: mapped, recipe: recipes[mapped] };
+  }
 
   if (!recipes[key]) {
     if (key === 'white' && recipes.white) key = 'white';
@@ -4511,9 +4736,9 @@ function buildPriceModal() {
         : '';
 
       block.innerHTML =
-        '<div class="price-cat-name"><span>' + cat.name + '</span><span class="material">' + cat.materialName + '</span></div>' +
-        '<div style="display:flex; justify-content:space-between; font-size:11px; color:var(--muted); margin-top:4px;"><span>Изготовление (' + qtyText + unitText + ')</span><span>' + formatRub(cat.materialCost) + '</span></div>' +
-        '<div style="display:flex; justify-content:space-between; font-size:11px; color:var(--muted);"><span>Покраска: ' + cat.paintName + ' (' + cat.paintArea.toFixed(2) + ' м²)</span><span>' + formatRub(cat.paintCost) + '</span></div>' +
+        '<div class="price-cat-name"><span>' + escapeTechHtml(cat.name) + '</span><span class="material">' + escapeTechHtml(cat.materialName) + '</span></div>' +
+        '<div style="display:flex; justify-content:space-between; font-size:11px; color:var(--muted); margin-top:4px;"><span>Изготовление (' + escapeTechHtml(qtyText + unitText) + ')</span><span>' + formatRub(cat.materialCost) + '</span></div>' +
+        '<div style="display:flex; justify-content:space-between; font-size:11px; color:var(--muted);"><span>Покраска: ' + escapeTechHtml(cat.paintName) + ' (' + cat.paintArea.toFixed(2) + ' м²)</span><span>' + formatRub(cat.paintCost) + '</span></div>' +
         noteHtml +
         '<div class="price-cat-result" style="margin-top:8px; border-top:1px solid var(--border); padding-top:4px;">' + formatRub(cat.materialCost + cat.paintCost) + '</div>';
       body.appendChild(block);
@@ -4729,7 +4954,10 @@ async function applyGeneratedPrice() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(generated.draft)
     });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (!res.ok) {
+      const errorBody = await res.json().catch(() => ({}));
+      throw new Error(errorBody.error || ('HTTP ' + res.status));
+    }
     showToast('Клиентская цена пересчитана', true);
     setTimeout(() => location.reload(), 700);
   } catch (err) {
@@ -4805,7 +5033,7 @@ async function buildClientPriceModal() {
     groupBlock.className = 'price-group';
     const title = document.createElement('div');
     title.className = 'price-group-title';
-    title.innerHTML = '<span>' + group.title + '</span>';
+    title.innerHTML = '<span>' + escapeTechHtml(group.title) + '</span>';
     groupBlock.appendChild(title);
 
     const body = document.createElement('div');
@@ -4824,9 +5052,9 @@ async function buildClientPriceModal() {
       }
 
       block.innerHTML =
-        '<div class="price-cat-name"><span>' + cat.name + '</span><span class="material">' + cat.materialName + '</span></div>' +
-        '<div style="display:flex; justify-content:space-between; font-size:11px; color:var(--muted); margin-top:4px;"><span>Изготовление (' + qtyText + unitText + ')</span><span>' + formatRub(cat.materialCost) + '</span></div>' +
-        '<div style="display:flex; justify-content:space-between; font-size:11px; color:var(--muted);"><span>Покраска: ' + cat.paintName + ' (' + cat.paintArea.toFixed(2) + ' м²)</span><span>' + formatRub(cat.paintCost) + '</span></div>' +
+        '<div class="price-cat-name"><span>' + escapeTechHtml(cat.name) + '</span><span class="material">' + escapeTechHtml(cat.materialName) + '</span></div>' +
+        '<div style="display:flex; justify-content:space-between; font-size:11px; color:var(--muted); margin-top:4px;"><span>Изготовление (' + escapeTechHtml(qtyText + unitText) + ')</span><span>' + formatRub(cat.materialCost) + '</span></div>' +
+        '<div style="display:flex; justify-content:space-between; font-size:11px; color:var(--muted);"><span>Покраска: ' + escapeTechHtml(cat.paintName) + ' (' + cat.paintArea.toFixed(2) + ' м²)</span><span>' + formatRub(cat.paintCost) + '</span></div>' +
         '<div class="price-cat-result" style="margin-top:8px; border-top:1px solid var(--border); padding-top:4px;">' + formatRub(cat.materialCost + cat.paintCost) + '</div>';
       body.appendChild(block);
     });
@@ -4952,7 +5180,7 @@ function buildParamsModal() {
     if (!section && (value === null || value === undefined || value === '' || value === 0)) return;
     const el = document.createElement('div');
     el.className = 'param-row' + (section ? ' section' : '');
-    el.innerHTML = section ? '<span>' + label + '</span>' : '<span class="label">' + label + '</span><span class="value">' + value + '</span>';
+    el.innerHTML = section ? '<span>' + escapeTechHtml(label) + '</span>' : '<span class="label">' + escapeTechHtml(label) + '</span><span class="value">' + escapeTechHtml(value) + '</span>';
     paramsBody.appendChild(el);
   }
 
@@ -5088,7 +5316,7 @@ function buildOrderModal() {
     '<div style="text-align:center;padding:6px 0 12px;">' +
       '<div style="font-size:20px;font-weight:800;color:var(--text);">Бланк заказа</div>' +
       '<div style="font-size:12px;color:var(--muted);margin-top:4px;">' +
-        (modelName || 'Лестница') + ' · ' + dateStr +
+        escapeTechHtml(modelName || 'Лестница') + ' · ' + escapeTechHtml(dateStr) +
       '</div>' +
     '</div>';
   orderBody.appendChild(header);
@@ -5120,7 +5348,7 @@ function buildOrderModal() {
   if (bomData.params) {
     const p = bomData.params;
     const rows = [];
-    const push = (label, val) => { if (val) rows.push('<div class="param-row"><span class="label">' + label + '</span><span class="value">' + val + '</span></div>'); };
+    const push = (label, val) => { if (val) rows.push('<div class="param-row"><span class="label">' + escapeTechHtml(label) + '</span><span class="value">' + escapeTechHtml(val) + '</span></div>'); };
 
     if (p.floorheight)  push('Высота этажа',     Math.round(p.floorheight) + ' мм');
     if (p.flightCount > 1) {
@@ -5176,8 +5404,8 @@ function buildOrderModal() {
     tableRows.push(
       '<tr>' +
         '<td class="num">' + idx + '</td>' +
-        '<td>' + cat.name + '</td>' +
-        '<td class="mat">' + found.materialName + '</td>' +
+        '<td>' + escapeTechHtml(cat.name) + '</td>' +
+        '<td class="mat">' + escapeTechHtml(found.materialName) + '</td>' +
         '<td class="qty">' + found.count + ' шт</td>' +
         '<td class="sum">' + formatRub(found.materialCost) + '</td>' +
       '</tr>'
@@ -5387,13 +5615,7 @@ document.getElementById('techCardRefresh').addEventListener('click', () => {
   buildTechCardModal();
 });
 document.getElementById('btnAdminCost').addEventListener('click', () => {
-  const password = window.prompt('Пароль для админки цен:', '');
-  if (password === null) return;
-  if (password === 'admin') {
-    window.open(window.ADMIN_URL || 'admin.html', '_blank');
-  } else {
-    showToast('Неверный пароль', true);
-  }
+  window.open(window.ADMIN_URL || '/admin.html', '_blank');
 });
 
 window.addEventListener('keydown', (e) => {
