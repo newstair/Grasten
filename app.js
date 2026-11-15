@@ -1633,7 +1633,7 @@ function applyUrlState() {
   }
 }
 
-function buildShareUrl() {
+function buildShareUrl(requestId) {
   const params = new URLSearchParams(location.search);
   params.set('cam', camera.position.x.toFixed(3) + ',' + camera.position.y.toFixed(3) + ',' + camera.position.z.toFixed(3));
   params.set('target', controls.target.x.toFixed(3) + ',' + controls.target.y.toFixed(3) + ',' + controls.target.z.toFixed(3));
@@ -1647,12 +1647,29 @@ function buildShareUrl() {
     params.delete('humanR');
   }
 
+  if (requestId) params.set('rid', String(requestId));
+  else params.delete('rid');
+
   ['finish', 'color', 'baluster', 'visible', 'paint', 'delivery', 'montage'].forEach((key) => params.delete(key));
   const state = buildClientState();
   if (hasClientState(state)) params.set('state', JSON.stringify(state));
   else params.delete('state');
 
-  return location.origin + location.pathname + '?' + params.toString();
+  // new URL(...) keeps the real address even in a sandboxed iframe where
+  // location.origin is the opaque origin "null".
+  const url = new URL(location.href);
+  url.hash = '';
+  url.search = params.toString();
+  return url.href;
+}
+
+function replaceHistoryUrl(url) {
+  try {
+    history.replaceState(null, '', url);
+  } catch (error) {
+    // Sandboxed iframe without allow-same-origin may block history changes.
+    // The generated link/file still contains the actual settings.
+  }
 }
 
 /* ---------- Указатель ---------- */
@@ -1722,8 +1739,10 @@ function reorderPanelLayout() {
   }
   const savePos = document.getElementById('btnSavePos');
   const reset = document.getElementById('btnReset');
-  if (savePos && reset && savePos.parentElement) {
-    savePos.parentElement.insertBefore(reset, savePos.nextSibling);
+  const saveActions = savePos ? savePos.closest('.save-actions') : null;
+  const saveAnchor = saveActions || savePos;
+  if (saveAnchor && reset && saveAnchor.parentElement) {
+    saveAnchor.parentElement.insertBefore(reset, saveAnchor.nextSibling);
   }
 }
 reorderPanelLayout();
@@ -2355,7 +2374,7 @@ document.getElementById('btnShot').addEventListener('click', () => {
 });
 document.getElementById('btnShare').addEventListener('click', async () => {
   const url = buildShareUrl();
-  history.replaceState(null, '', url);
+  replaceHistoryUrl(url);
   const title = document.title || '3D Viewer';
   if (navigator.share) {
     try { await navigator.share({ title, text: 'Посмотрите 3D-модель', url }); return; }
@@ -2403,12 +2422,215 @@ document.getElementById('btnReset').addEventListener('click', () => {
   if (currentModel) fitCamera();
 });
 
-document.getElementById('btnSavePos').addEventListener('click', () => {
-  const newUrl = buildShareUrl();
-  history.replaceState(null, '', newUrl);
-  navigator.clipboard.writeText(newUrl).then(() => {
-    showToast('Ссылка с настройками и позицией скопирована', true);
-  }).catch(() => prompt('Скопируйте ссылку вручную:', newUrl));
+/* ---------- Настройки клиента: ссылка + локальный файл ---------- */
+const CLIENT_SETTINGS_FORMAT = 'lignarius-client-state';
+const CLIENT_SETTINGS_VERSION = 1;
+let clientSettingsFile = null;
+
+function randomRequestCode() {
+  const alphabet = '0123456789ABCDEF';
+  let code = '';
+  try {
+    const bytes = new Uint8Array(6);
+    if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+      window.crypto.getRandomValues(bytes);
+    } else {
+      for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
+    for (let i = 0; i < bytes.length; i++) code += alphabet[bytes[i] % alphabet.length];
+  } catch (error) {
+    for (let i = 0; i < 6; i++) code += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return 'GR-' + code;
+}
+
+function clientSettingsView() {
+  const view = {
+    cam: camera.position.x.toFixed(3) + ',' + camera.position.y.toFixed(3) + ',' + camera.position.z.toFixed(3),
+    target: controls.target.x.toFixed(3) + ',' + controls.target.y.toFixed(3) + ',' + controls.target.z.toFixed(3)
+  };
+  if (humanGroup.visible) {
+    view.human = humanGroup.position.x.toFixed(3) + ',' + humanGroup.position.y.toFixed(3) + ',' + humanGroup.position.z.toFixed(3);
+    view.humanH = String(humanHeight);
+    view.humanR = String(humanRotation);
+  }
+  return view;
+}
+
+function clientSettingsProject() {
+  const pp = projectParams || {};
+  const km = Number(pp.delivery_km);
+  let title = pp.title ? String(pp.title).slice(0, 200) : '';
+  if (!title) {
+    title = String(document.title || '').replace(/\s+—\s+.*$/, '').trim().slice(0, 200);
+  }
+  return {
+    title,
+    number: pp.number ? String(pp.number).slice(0, 80) : '',
+    deliveryKm: Number.isFinite(km) && km >= 0 ? km : null
+  };
+}
+
+function buildClientSettingsFile() {
+  const requestId = randomRequestCode();
+  const createdAt = new Date().toISOString();
+  let price = null;
+  try { price = calculatePrice(currentKm); } catch (error) { price = null; }
+  const hasPrice = Boolean(priceData && priceData.categories && bomGroups && bomGroups.length && price && price.groups && price.groups.length);
+  const total = hasPrice && Number.isFinite(price.total) ? Math.round(price.total * 100) / 100 : null;
+  let shareUrl = '';
+  try { shareUrl = buildShareUrl(requestId); } catch (error) {
+    try { shareUrl = location.href; } catch (linkError) { shareUrl = ''; }
+  }
+  const payload = {
+    format: CLIENT_SETTINGS_FORMAT,
+    version: CLIENT_SETTINGS_VERSION,
+    createdAt,
+    requestId,
+    project: clientSettingsProject(),
+    state: buildClientState(),
+    view: clientSettingsView(),
+    total,
+    currency: 'RUB',
+    url: shareUrl
+  };
+  const json = JSON.stringify(payload, null, 2) + '\n';
+  const fileName = 'client-state-' + requestId + '-' + createdAt.slice(0, 10) + '.json';
+  let shareFile = null;
+  try {
+    if (typeof File === 'function') {
+      shareFile = new File([json], fileName, { type: 'application/json' });
+    }
+  } catch (error) {
+    shareFile = null;
+  }
+  return { payload, json, fileName, shareFile };
+}
+
+function canShareClientSettingsFile(file) {
+  if (!file || !navigator || typeof navigator.share !== 'function') return false;
+  if (typeof navigator.canShare !== 'function') return false;
+  try {
+    return navigator.canShare({ files: [file] });
+  } catch (error) {
+    return false;
+  }
+}
+
+async function copyClientSettingsLink() {
+  const input = document.getElementById('clientSettingsLink');
+  if (!input) return;
+  const link = input.value;
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      await navigator.clipboard.writeText(link);
+      showToast('Ссылка скопирована', true);
+      return;
+    }
+  } catch (error) {
+    // Clipboard API is often unavailable in sandboxed iframes.
+  }
+  try {
+    input.focus();
+    input.select();
+    input.setSelectionRange(0, input.value.length);
+    if (document.execCommand && document.execCommand('copy')) {
+      showToast('Ссылка скопирована', true);
+      return;
+    }
+  } catch (error) {
+    // Fall through to the manual prompt.
+  }
+  prompt('Скопируйте ссылку вручную:', link);
+}
+
+function downloadClientSettingsFile() {
+  if (!clientSettingsFile) return;
+  try {
+    const blob = new Blob([clientSettingsFile.json], { type: 'application/json;charset=utf-8' });
+    const href = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = href;
+    a.download = clientSettingsFile.fileName;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => { try { URL.revokeObjectURL(href); } catch (error) {} }, 60000);
+    showToast('Файл настроек скачан', true);
+  } catch (error) {
+    prompt('Сохраните файл вручную (JSON):', clientSettingsFile.json);
+  }
+}
+
+async function shareClientSettingsFile() {
+  if (!clientSettingsFile || !clientSettingsFile.shareFile) return;
+  try {
+    await navigator.share({
+      files: [clientSettingsFile.shareFile],
+      title: 'Настройки клиента',
+      text: 'Файл настроек лестницы. Персональных данных в файле нет.'
+    });
+  } catch (error) {
+    if (error && error.name === 'AbortError') return;
+    showToast('Поделиться файлом не удалось — скачайте файл', false);
+  }
+}
+
+async function openClientSettingsModal(mode) {
+  if (!dxfLoadPromise) {
+    showToast('Подготовка расчёта…', true);
+    try { await loadAllDXF(); } catch (error) { console.warn('DXF не загрузились:', error); }
+  } else {
+    try { await dxfLoadPromise; } catch (error) { console.warn('DXF не загрузились:', error); }
+  }
+  clientSettingsFile = buildClientSettingsFile();
+  replaceHistoryUrl(clientSettingsFile.payload.url);
+
+  const title = document.getElementById('clientSettingsTitle');
+  const subtitle = document.getElementById('clientSettingsSubtitle');
+  const code = document.getElementById('clientSettingsCode');
+  const link = document.getElementById('clientSettingsLink');
+  const note = document.getElementById('clientSettingsNote');
+  const shareBtn = document.getElementById('clientSettingsShareFile');
+  const overlay = document.getElementById('clientSettingsOverlay');
+
+  const sendMode = mode === 'send';
+  if (title) title.textContent = sendMode ? '📤 Сохранить и отправить' : '💾 Настройки клиента';
+  if (subtitle) subtitle.textContent = sendMode
+    ? 'Скачайте файл и прикрепите его к заказу'
+    : 'Файл настроек без персональных данных';
+  if (code) code.textContent = clientSettingsFile.payload.requestId;
+  if (link) link.value = clientSettingsFile.payload.url;
+  if (note) {
+    note.className = 'client-settings-note' + (sendMode ? ' send' : '');
+    note.textContent = sendMode
+      ? 'Скачайте файл и прикрепите его к заказу или отправьте менеджеру. В файле нет контактов — только настройки, вид и итог клиента.'
+      : 'Файл сохраняется на устройство. Ссылку можно скопировать и открыть позже — настройки и позиция камеры сохранятся.';
+  }
+  if (shareBtn) {
+    shareBtn.style.display = canShareClientSettingsFile(clientSettingsFile.shareFile) ? 'inline-flex' : 'none';
+  }
+  if (overlay) overlay.classList.add('show');
+}
+
+function closeClientSettingsModal() {
+  const overlay = document.getElementById('clientSettingsOverlay');
+  if (overlay) overlay.classList.remove('show');
+}
+
+document.getElementById('btnSavePos').addEventListener('click', () => openClientSettingsModal('save'));
+document.getElementById('btnSaveSend').addEventListener('click', () => openClientSettingsModal('send'));
+document.getElementById('clientSettingsCopy').addEventListener('click', copyClientSettingsLink);
+document.getElementById('clientSettingsDownload').addEventListener('click', downloadClientSettingsFile);
+document.getElementById('clientSettingsShareFile').addEventListener('click', shareClientSettingsFile);
+document.getElementById('clientSettingsCloseBtn').addEventListener('click', closeClientSettingsModal);
+document.getElementById('clientSettingsClose').addEventListener('click', closeClientSettingsModal);
+document.getElementById('clientSettingsOverlay').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeClientSettingsModal();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeClientSettingsModal();
 });
 
 window.addEventListener('keydown', (e) => {

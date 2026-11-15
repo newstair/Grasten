@@ -9,7 +9,7 @@
 <meta property="og:description" content="3D-модель лестницы, расчёт и чертежи">
 <meta property="og:image" content="logo.jpg">
 <meta property="og:type" content="website">
-<link rel="stylesheet" href="style.css?v=fa492e2c">
+<link rel="stylesheet" href="style.css?v=4ec41fd6">
 <style id="client-mode">
   #btnOrder, #btnTechCard, #btnAdminCost { display: none !important; }
 </style>
@@ -219,10 +219,15 @@
     <span class="ico">📐</span> Чертежи
   </button>
 
-  <!-- ═══ Сохранить позицию ═══ -->
-  <button class="btn big" id="btnSavePos">
-    <span class="ico">💾</span> Сохранить позицию
-  </button>
+  <!-- ═══ Сохранить настройки ═══ -->
+  <div class="save-actions">
+    <button class="btn big" id="btnSavePos">
+      <span class="ico">💾</span> Сохранить настройки
+    </button>
+    <button class="btn big" id="btnSaveSend">
+      <span class="ico">📤</span> Сохранить и отправить
+    </button>
+  </div>
 
   <div class="divider"></div>
 
@@ -311,6 +316,38 @@
     <div class="modal-body" id="priceModalBody"></div>
     <div class="modal-footer">
       <button class="btn" id="priceModalCloseBtn">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Модальное окно: Настройки клиента ═══ -->
+<div class="modal-overlay" id="clientSettingsOverlay">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <span class="title" id="clientSettingsTitle">💾 Настройки клиента</span>
+        <span class="subtitle" id="clientSettingsSubtitle">Файл настроек без персональных данных</span>
+      </div>
+      <button class="modal-close" id="clientSettingsClose" aria-label="Закрыть">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="client-settings-code">
+        <div class="client-settings-code-label">Код запроса</div>
+        <div class="client-settings-code-value" id="clientSettingsCode">—</div>
+      </div>
+      <label class="client-settings-field" for="clientSettingsLink">Ссылка с настройками
+        <input type="text" id="clientSettingsLink" readonly autocomplete="off" spellcheck="false">
+      </label>
+      <div class="client-settings-note" id="clientSettingsNote"></div>
+      <div class="client-settings-note muted" id="clientSettingsPrivacy">
+        В файле только настройки проекта, вид камеры и итог клиента. Имя, телефон, email и адрес не собираются и не сохраняются.
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="clientSettingsCopy">📋 Скопировать ссылку</button>
+      <button class="btn primary" id="clientSettingsDownload">📥 Скачать файл</button>
+      <button class="btn" id="clientSettingsShareFile" style="display:none;">📤 Поделиться файлом</button>
+      <button class="btn" id="clientSettingsCloseBtn">Закрыть</button>
     </div>
   </div>
 </div>
@@ -404,6 +441,6 @@
 }
 </script>
 
-<script type="module" src="app.js?v=8be9a0ea"></script>
+<script type="module" src="app.js?v=42da926b"></script>
 </body>
 </html>

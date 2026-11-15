@@ -292,6 +292,30 @@
     display:flex;justify-content:center;gap:10px;flex-shrink:0;flex-wrap:wrap;}
   .modal-footer .btn{min-width:140px;padding:11px 20px;font-size:13px;}
 
+  /* ═══ Настройки клиента ═══ */
+  .save-actions{display:flex;flex-wrap:wrap;gap:8px;}
+  .save-actions .btn{flex:1 1 120px;white-space:normal;line-height:1.25;text-align:center;padding:10px 8px;}
+  .client-settings-code{
+    display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:12px 14px;border:1px solid var(--border-str);border-radius:12px;
+    background:rgba(91,140,255,.08);
+  }
+  .client-settings-code-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;}
+  .client-settings-code-value{font-family:ui-monospace,Consolas,monospace;font-size:18px;font-weight:800;color:var(--accent-2);letter-spacing:.03em;}
+  .client-settings-field{display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--muted);}
+  .client-settings-field input{
+    width:100%;box-sizing:border-box;padding:10px 12px;
+    background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:9px;
+    color:var(--text);font-family:ui-monospace,Consolas,monospace;font-size:12px;outline:none;
+  }
+  .client-settings-field input:focus{border-color:var(--accent);}
+  .client-settings-note{
+    padding:10px 12px;border:1px solid var(--border);border-radius:10px;
+    background:rgba(255,255,255,.03);font-size:12px;line-height:1.5;color:var(--text);
+  }
+  .client-settings-note.muted{color:var(--muted);font-size:11px;}
+  .client-settings-note.send{border-color:rgba(49,208,170,.4);background:rgba(49,208,170,.08);}
+
   /* ═══ Смета (БЕЗ формул) ═══ */
   .price-cat{
     display:flex;flex-direction:column;gap:4px;padding:12px 14px;
