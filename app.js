@@ -6104,13 +6104,10 @@ function buildOrderTableRows(groups, withoutPrices) {
 
     categories.forEach((category) => {
       index += 1;
-      const note = category.priceNote
-        ? '<div class="order-row-note">' + escapeTechHtml(category.priceNote) + '</div>'
-        : '';
       const baseCells =
         '<td class="num">' + index + '</td>' +
         '<td>' + escapeTechHtml(category.name || '—') + '</td>' +
-        '<td class="mat">' + escapeTechHtml(category.materialName || '—') + note + '</td>' +
+        '<td class="mat">' + escapeTechHtml(category.materialName || '—') + '</td>' +
         '<td>' + escapeTechHtml(category.paintName || '—') + '</td>' +
         '<td class="qty">' + escapeTechHtml(orderQuantityText(category)) + '</td>';
 
