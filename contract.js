@@ -336,6 +336,10 @@ function buildContractHtml({ project, company, contractTotal, contractWorks, del
   html, body { margin: 0; padding: 0; background: #fff; color: #000; }
   body { font-family: "Times New Roman", Times, serif; font-size: 10.5pt; line-height: 1.38; }
   .page { width: 178mm; margin: 0 auto; }
+  .print-toolbar { width: 178mm; margin: 0 auto 4mm; display: flex; align-items: center; gap: 4mm; }
+  .print-toolbar button { padding: 2.5mm 5mm; border: 1px solid #000; background: #000; color: #fff; font: 600 10pt Arial, sans-serif; cursor: pointer; }
+  .print-toolbar button:hover { background: #333; }
+  .print-toolbar span { font-size: 9pt; color: #333; }
   .draft-note { border: 1px solid #000; padding: 2.5mm 3mm; margin-bottom: 4mm; font-size: 8.5pt; text-align: center; }
   .header { display: flex; align-items: flex-start; gap: 4mm; border-bottom: 1px solid #000; padding-bottom: 2mm; margin-bottom: 3mm; }
   .logo { width: 18mm; height: auto; display: block; }
@@ -354,8 +358,12 @@ function buildContractHtml({ project, company, contractTotal, contractWorks, del
   .footer-note { margin-top: 3mm; font-size: 8pt; color: #222; }
   a { color: #000; text-decoration: none; }
   @media screen { body { background: #e9edf2; padding: 8mm; } .page { background: #fff; padding: 6mm; box-shadow: 0 2mm 8mm rgba(0,0,0,.15); } }
-  @media print { body { background: #fff; padding: 0; } .page { box-shadow: none; margin: 0; width: auto; } }
+  @media print { body { background: #fff; padding: 0; } .page { box-shadow: none; margin: 0; width: auto; } .print-toolbar { display: none !important; } }
 </style></head><body>
+<div class="print-toolbar">
+  <button type="button" onclick="window.print()">Печать / Сохранить PDF</button>
+  <span>В диалоге печати выберите «Сохранить как PDF».</span>
+</div>
 <div class="page">
   <div class="draft-note">Проект договора. Персональные данные Заказчика заполняются при подписании; сроки изготовления согласуются после подписания Договора.</div>
   <div class="header">
@@ -390,28 +398,9 @@ function printContract(data) {
       printWindow.document.write(html);
       printWindow.document.close();
       printWindow.focus();
-      const launch = () => {
-        try { printWindow.print(); } catch (error) { console.warn('Печать договора недоступна:', error); }
-      };
-      const images = Array.from(printWindow.document.images || []);
-      const pending = images.filter((image) => !image.complete);
-      if (!pending.length) {
-        window.setTimeout(launch, 400);
-      } else {
-        let remaining = pending.length;
-        const done = () => {
-          remaining -= 1;
-          if (remaining <= 0) window.setTimeout(launch, 300);
-        };
-        pending.forEach((image) => {
-          image.addEventListener('load', done, { once: true });
-          image.addEventListener('error', done, { once: true });
-        });
-        window.setTimeout(launch, 2500);
-      }
       return;
     } catch (error) {
-      console.warn('Не удалось открыть окно печати договора:', error);
+      console.warn('Не удалось открыть окно договора:', error);
     }
   }
 

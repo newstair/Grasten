@@ -3,7 +3,7 @@ import { OrbitControls }  from 'three/addons/controls/OrbitControls.js';
 import { ColladaLoader }  from 'three/addons/loaders/ColladaLoader.js';
 import { GLTFLoader }     from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { printContract } from './contract.js?v=640d953c';
+import { printContract } from './contract.js?v=41f0b07f';
 
 /* ═══════════════════════════════════════════════════════════════
    КОНСТАНТЫ
@@ -6156,8 +6156,10 @@ function updateOrderTermPreview(total) {
   const payment = getOrderPayment(total, state);
   const paymentEl = document.getElementById('orderPaymentPreview');
   const termsEl = document.getElementById('orderTermsPreview');
+  const prepaymentAmountEl = document.getElementById('orderPrepaymentAmount');
   if (paymentEl) paymentEl.innerHTML = buildOrderPaymentHtml(payment, state);
   if (termsEl) termsEl.innerHTML = buildOrderTermsPreviewHtml(state);
+  if (prepaymentAmountEl) prepaymentAmountEl.textContent = formatRub(payment.amount);
 }
 
 function bindOrderTermInputs(total) {
@@ -6308,7 +6310,10 @@ async function buildOrderModal() {
       '<div class="order-section-title">Условия</div>' +
       '<div class="order-terms-grid">' +
         '<label class="order-term-field"><span>Предоплата, %</span>' +
-          '<input type="number" id="orderPrepayment" min="0" max="100" step="1" value="' + escapeTechHtml(String(state.prepayment)) + '">' +
+          '<div class="order-term-inline">' +
+            '<input type="number" id="orderPrepayment" min="0" max="100" step="1" value="' + escapeTechHtml(String(state.prepayment)) + '">' +
+            '<span class="order-term-amount" id="orderPrepaymentAmount">' + formatRub(payment.amount) + '</span>' +
+          '</div>' +
         '</label>' +
         '<label class="order-term-field"><span>Срок изготовления, рабочих дней</span>' +
           '<input type="number" id="orderLead" min="1" step="1" value="' + escapeTechHtml(String(state.leadDays)) + '">' +
@@ -6325,7 +6330,7 @@ async function buildOrderModal() {
       '</div>';
     orderBody.appendChild(termsSec);
 
-    bindOrderTermInputs(result.total);
+    bindOrderTermInputs(contractTotal);
   } catch (error) {
     console.error('Не удалось построить бланк заказа:', error);
     orderBody.innerHTML = '<div class="price-empty">Не удалось подготовить бланк заказа. Обновите страницу и попробуйте снова.</div>';
