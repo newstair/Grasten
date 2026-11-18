@@ -9,9 +9,9 @@
 <meta property="og:description" content="3D-модель лестницы, расчёт и чертежи">
 <meta property="og:image" content="logo.jpg">
 <meta property="og:type" content="website">
-<link rel="stylesheet" href="style.css?v=4ec41fd6">
+<link rel="stylesheet" href="style.css?v=206c9afb">
 <style id="client-mode">
-  #btnOrder, #btnTechCard, #btnAdminCost { display: none !important; }
+  #btnTechCard, #btnAdminCost, .order-footer-check { display: none !important; }
 </style>
 </head>
 <body>
@@ -31,12 +31,16 @@
 
 <aside class="panel hidden" id="panel">
 
-  <button class="btn primary big" id="btnPrice" style="display:none;">
+  <button class="btn primary big" id="btnPrice">
     <span class="ico">💰</span> Детали расчёта
   </button>
 
-  <button class="btn big" id="btnOrder" style="display:none;">
+  <button class="btn big" id="btnOrder">
     <span class="ico">📄</span> Бланк заказа
+  </button>
+
+  <button class="btn big" id="btnContract">
+    <span class="ico">📝</span> Договор
   </button>
 
   <button class="btn big" id="btnTechCard">
@@ -388,7 +392,7 @@
 
 <!-- ═══ Модальное окно: Бланк заказа ═══ -->
 <div class="modal-overlay" id="orderModalOverlay">
-  <div class="modal">
+  <div class="modal" style="max-width:1040px;width:96vw;">
     <div class="modal-header">
       <div>
         <span class="title">📄 Бланк заказа</span>
@@ -398,9 +402,11 @@
     </div>
     <div class="modal-body" id="orderModalBody"></div>
     <div class="modal-footer">
-      <button class="btn" id="orderDownload">📥 Скачать PDF</button>
-      <button class="btn primary" id="orderShare">🔗 Поделиться</button>
+      <label class="order-footer-check"><input type="checkbox" id="orderWithoutPrices"> Без цен (для цеха)</label>
+      <button class="btn primary" id="orderDownload">🖨 Печать / PDF</button>
+      <button class="btn" id="orderShare">🔗 Поделиться</button>
       <button class="btn" id="orderModalCloseBtn">Закрыть</button>
+      <div class="order-footer-note">Компактный бланк — одна страница A4. В диалоге печати выберите «Сохранить как PDF».</div>
     </div>
   </div>
 </div>
@@ -441,6 +447,6 @@
 }
 </script>
 
-<script type="module" src="app.js?v=42da926b"></script>
+<script type="module" src="app.js?v=6c69f02f"></script>
 </body>
 </html>

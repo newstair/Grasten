@@ -3,6 +3,7 @@ import { OrbitControls }  from 'three/addons/controls/OrbitControls.js';
 import { ColladaLoader }  from 'three/addons/loaders/ColladaLoader.js';
 import { GLTFLoader }     from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { printContract } from './contract.js?v=3517f6bb';
 
 /* ═══════════════════════════════════════════════════════════════
    КОНСТАНТЫ
@@ -576,6 +577,9 @@ function parseBOM(xmlText) {
   const numRisersList = numList('numberofrisers');
   const pitchList = textList('pitch');
   const recalcGoingList = numList('recalculatedgoing');
+  const normalizeDim = (value) => value
+    ? value.replace(/⌀/g, 'Ø').replace(/Ш(?=\d)/g, 'Ø')
+    : value;
 
   result.params = {
     ceiling:       num('ceiling'),
@@ -599,7 +603,8 @@ function parseBOM(xmlText) {
     landingDepth:  recalcGoingList.length >= 3 ? recalcGoingList[1] : null,
     railingHeight: txt('railing > height'),
     handrailDim:   txt('handrail > dim'),
-    balusterDim:   txt('baluster > dim'),
+    balusterName:  txt('baluster > name'),
+    balusterDim:   normalizeDim(txt('baluster > dim')),
     newelName:     txt('newel > name'),
     floorName:     txt('floor > name'),
   };
@@ -637,6 +642,17 @@ async function loadBOM() {
   if (bomLoadPromise) return bomLoadPromise;
   bomLoadPromise = doLoadBOM();
   return bomLoadPromise;
+}
+
+function decodeBomBuffer(buffer) {
+  const cp1251 = new TextDecoder('windows-1251').decode(buffer);
+  const cp1252 = new TextDecoder('windows-1252').decode(buffer);
+  const cyrillic = (text) => (text.match(/[А-Яа-яЁё]/g) || []).length;
+  const cyrillic1251 = cyrillic(cp1251);
+  const cyrillic1252 = cyrillic(cp1252);
+  if (cyrillic1251 > cyrillic1252) return cp1251;
+  if (cyrillic1252 > cyrillic1251) return cp1252;
+  return cp1252;
 }
 
 async function doLoadBOM() {
@@ -688,8 +704,7 @@ async function doLoadBOM() {
       const r = await fetch(name, { cache: 'no-store' });
       if (!r.ok) continue;
       const buf = await r.arrayBuffer();
-      const decoder = new TextDecoder('windows-1252');
-      const text = decoder.decode(buf);
+      const text = decodeBomBuffer(buf);
       const parsed = parseBOM(text);
 
       let floor = 1;
@@ -3586,6 +3601,12 @@ function getBalusterPricing(size, materialKey, drawing) {
   return { price: basePrice + extra, source: 'base', basePrice: basePrice, extra: extra };
 }
 
+function getMarkupMultiplier() {
+  const percent = Number(priceData && priceData.markup_percent);
+  if (!Number.isFinite(percent) || percent <= 0) return 1;
+  return 1 + Math.min(500, percent) / 100;
+}
+
 function buildGroupResult(prefix, title, classified, paintPrice, countMontage, bomGroup) {
   const out = {
     prefix: prefix,
@@ -3597,6 +3618,7 @@ function buildGroupResult(prefix, title, classified, paintPrice, countMontage, b
   };
   if (!priceData || !priceData.categories) return out;
 
+  const markup = getMarkupMultiplier();
   const balusterSize = getBalusterSizeForGroup(prefix, classified, bomGroup);
 
   for (const catKey in priceData.categories) {
@@ -3638,9 +3660,9 @@ function buildGroupResult(prefix, title, classified, paintPrice, countMontage, b
 
       if (pricing.source === 'base') {
         priceNote = 'Цена для типоразмера ' + balusterSize + ' не заполнена — используется базовая ' +
-          formatRub(pricing.basePrice) +
-          (pricing.extra > 0 ? ' + рисунок ' + formatRub(pricing.extra) : '') +
-          ' = ' + formatRub(pricing.price) + '/шт.';
+          formatRub(pricing.basePrice * markup) +
+          (pricing.extra > 0 ? ' + рисунок ' + formatRub(pricing.extra * markup) : '') +
+          ' = ' + formatRub(pricing.price * markup) + '/шт.';
       }
     }
 
@@ -3658,6 +3680,9 @@ function buildGroupResult(prefix, title, classified, paintPrice, countMontage, b
       paintName = 'Без покраски';
     }
 
+    const markedUnitPrice = currentUnitPrice * markup;
+    const markedPaintCost = paintCost * markup;
+
     out.categories.push({
       key: catKey,
       name: cat.name + extraName,
@@ -3665,17 +3690,17 @@ function buildGroupResult(prefix, title, classified, paintPrice, countMontage, b
       count: items.length,
       qty: qty,
       method: cat.method,
-      unitPrice: currentUnitPrice,
+      unitPrice: markedUnitPrice,
       priceNote: priceNote,
       balusterSize: catKey === 'baluster' ? balusterSize : null,
       paintArea: paintArea,
-      materialCost: qty * currentUnitPrice,
-      paintCost: paintCost,
+      materialCost: qty * markedUnitPrice,
+      paintCost: markedPaintCost,
       paintName: paintName
     });
 
-    out.materialTotal += qty * currentUnitPrice;
-    out.paintTotal += paintCost;
+    out.materialTotal += qty * markedUnitPrice;
+    out.paintTotal += markedPaintCost;
   }
 
   if (countMontage) {
@@ -3689,7 +3714,7 @@ function buildGroupResult(prefix, title, classified, paintPrice, countMontage, b
     const coveringCount = isElementIncluded(prefix + '_covering')
       ? (classified.covering || []).length
       : 0;
-    out.montageCost = baseMontage * coef + 1200 * coveringCount;
+    out.montageCost = (baseMontage * coef + 1200 * coveringCount) * markup;
   }
 
   return out;
@@ -3707,6 +3732,7 @@ function calculatePrice(km) {
   };
   if (!bomGroups || !bomGroups.length || !priceData || !priceData.categories) return result;
 
+  const markup = getMarkupMultiplier();
   const paintPrice = (priceData.paint && priceData.paint.price_m2) || 0;
 
   for (const group of bomGroups) {
@@ -3723,10 +3749,12 @@ function calculatePrice(km) {
   }
 
   const base = 60 * (km || 0) + 800;
-  result.deliveryCost = deliveryEnabled && deliveryKmKnown ? Math.max(4500, base) : 0;
+  result.deliveryCost = (deliveryEnabled && deliveryKmKnown ? Math.max(4500, base) : 0) * markup;
   const montageBlock = calculateMontageBlock();
   result.montageBlock = montageBlock;
-  result.montageCost = montageEnabled && montageBlock ? montageBlock.final : 0;
+  result.montageCost = (montageEnabled && montageBlock ? montageBlock.final : 0) * markup;
+  result.markupPercent = Number(priceData.markup_percent) || 0;
+  result.markupMultiplier = markup;
 
   result.total = result.materialTotal + result.paintTotal + result.deliveryCost + result.montageCost;
   return result;
@@ -5221,6 +5249,7 @@ async function buildClientPriceModal() {
 
   const scrollTop = priceBody.scrollTop;
   const result = calculatePrice(currentKm);
+  syncClientTotal(result.total, result.markupMultiplier);
   priceBody.innerHTML = '';
 
   const intro = document.createElement('div');
@@ -5341,13 +5370,23 @@ async function buildClientPriceModal() {
 
   priceBody.appendChild(totals);
 
+  if (window.INTERNAL_MODE && result.markupPercent > 0) {
+    const baseTotal = result.markupMultiplier > 0 ? result.total / result.markupMultiplier : result.total;
+    const note = document.createElement('div');
+    note.className = 'price-client-note';
+    note.style.marginTop = '10px';
+    note.textContent = 'Надбавка посредника ' + result.markupPercent + '% (внутренняя): ' +
+      formatRub(result.total - baseTotal) + '. Клиент видит только итоговые цены.';
+    priceBody.appendChild(note);
+  }
+
   if (window.INTERNAL_MODE && result.montageBlock) {
     const mb = result.montageBlock;
     const details = document.createElement('details');
     details.className = 'price-client-note';
     details.style.marginTop = '10px';
     details.innerHTML =
-      '<summary>Как рассчитан монтаж · ' + formatRub(mb.final) + '</summary>' +
+      '<summary>Как рассчитан монтаж · ' + formatRub(mb.final) + (result.markupMultiplier !== 1 ? ' (база)' : '') + '</summary>' +
       '<div style="display:grid; gap:4px; margin-top:6px; font-size:11px;">' +
         '<div>Деталей: ' + mb.parts + ' · N_K: ' + mb.nk.toFixed(2) + ' · S_K: ' + mb.sk.toFixed(3) + ' м²</div>' +
         '<div>Монтажные операции: ' + formatRub(mb.operations) + ' · ' + Math.round(mb.personMinutes) + ' чел.-мин</div>' +
@@ -5355,6 +5394,7 @@ async function buildClientPriceModal() {
         '<div>Труд: ' + formatRub(mb.labor) + ' · накладные: ' + formatRub(mb.overhead) + '</div>' +
         '<div>Подача: ' + formatRub(mb.loading) + ' · проезд: ' + formatRub(mb.travel) + ' · крепёж: ' + formatRub(mb.fasteners) + '</div>' +
         '<div>База: ' + formatRub(mb.base) + ' · наценка 30%: ' + formatRub(mb.markup) + ' · УСН 6%: ' + formatRub(mb.usn) + '</div>' +
+        (result.markupMultiplier !== 1 ? '<div>Монтаж с надбавкой посредника: ' + formatRub(result.montageCost) + '</div>' : '') +
       '</div>';
     priceBody.appendChild(details);
   }
@@ -5362,17 +5402,40 @@ async function buildClientPriceModal() {
   priceBody.scrollTop = scrollTop;
 }
 
+let clientTotalSyncTimer = null;
+let lastSyncedClientTotal = '';
+
+function syncClientTotal(total, multiplier) {
+  if (!window.INTERNAL_MODE || !window.PROJECT_ID) return;
+  const rounded = Math.round(Number(total) || 0);
+  if (!rounded) return;
+  const factor = Number(multiplier) > 0 ? Number(multiplier) : 1;
+  const base = Math.round((Number(total) / factor) * 100) / 100;
+  const key = rounded + ':' + Math.round(base);
+  if (key === lastSyncedClientTotal) return;
+  lastSyncedClientTotal = key;
+  clearTimeout(clientTotalSyncTimer);
+  clientTotalSyncTimer = setTimeout(() => {
+    fetch('/api/projects/' + encodeURIComponent(window.PROJECT_ID) + '/current-total', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ total: rounded, baseTotal: base })
+    }).catch(() => {});
+  }, 700);
+}
+
 function updatePriceSummary() {
-  if (!priceSummary) return;
   if (!bomGroups || !bomGroups.length || !priceData || !priceData.categories) {
-    priceSummary.style.display = 'none';
+    if (priceSummary) priceSummary.style.display = 'none';
     return;
   }
   const result = calculatePrice(currentKm);
   if (!result.groups.length) {
-    priceSummary.style.display = 'none';
+    if (priceSummary) priceSummary.style.display = 'none';
     return;
   }
+  if (!priceSummary) return;
   priceSummary.style.display = 'block';
   priceSummary.innerHTML = 'Предварительно<b>' + formatRub(result.total) + '</b>';
 }
@@ -5517,169 +5580,1088 @@ function buildParamsModal() {
 /* ═══════════════════════════════════════════════════════════════
    БЛАНК ЗАКАЗА
    ═══════════════════════════════════════════════════════════════ */
-const ORDER_PDF_FILE = 'Olyga Toksovo.pdf';
+const ORDER_COMPANY = {
+  name: 'ООО «Лигнариус»',
+  brand: 'Лигнариус',
+  address: '198096, Санкт-Петербург, ул. Корабельная, д. 6, лит. ДЩ',
+  headerAddress: 'г. Санкт-Петербург',
+  phone: '+7 (981) 686-03-01',
+  email: 'newstair@gmail.com',
+  inn: '7805353273',
+  kpp: '780501001',
+  ogrn: '1047855049417',
+  bank: 'Северо-Западный банк ПАО Сбербанк, Приморское ОСБ № 2003; р/с 40702810055070181401; к/с 30101810500000000653; БИК 044030653',
+  director: '—'
+};
 
-function buildOrderModal() {
+const ORDER_DEFAULTS = {
+  prepayment: 50,
+  leadDays: 30,
+  validityDays: 14,
+  warranty: '12 месяцев'
+};
+
+let orderFormState = { ...ORDER_DEFAULTS };
+let orderDrawingsData = null;
+let crmProjectCache = null;
+let crmProjectPromise = null;
+
+function orderText(value) {
+  return value == null ? '' : String(value).trim();
+}
+
+function orderDisplay(value) {
+  return orderText(value) || '—';
+}
+
+function orderClientField(value) {
+  const text = orderText(value);
+  if (text) return text;
+  return window.INTERNAL_MODE ? '—' : '________________';
+}
+
+function orderIsPlaceholder(value) {
+  const text = orderText(value);
+  return !text || text === '—' || text === '-' || text === '–' || text.toLowerCase() === 'n/a';
+}
+
+function orderClampNumber(value, fallback, min, max) {
+  const normalized = String(value == null ? '' : value).replace(',', '.').trim();
+  const number = Number(normalized);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, number));
+}
+
+function orderAbsoluteUrl(value) {
+  const text = orderText(value);
+  if (!text) return '';
+  try {
+    const url = new URL(text, location.href);
+    if (url.protocol === 'http:' || url.protocol === 'https:') return url.href;
+  } catch (error) {
+    // Некорректный URL — не подставляем его в документ.
+  }
+  return '';
+}
+
+function orderDateString(date) {
+  return (date || new Date()).toLocaleDateString('ru-RU');
+}
+
+function orderPlural(number, one, few, many) {
+  const n = Math.abs(Number(number)) % 100;
+  const last = n % 10;
+  if (n > 10 && n < 20) return many;
+  if (last === 1) return one;
+  if (last >= 2 && last <= 4) return few;
+  return many;
+}
+
+function orderLeadDaysText(number) {
+  return number + ' ' + orderPlural(number, 'рабочий день', 'рабочих дня', 'рабочих дней');
+}
+
+function orderValidityDaysText(number) {
+  return number + ' ' + orderPlural(number, 'день', 'дня', 'дней');
+}
+
+function orderFallbackNumber() {
+  const date = new Date();
+  return 'БЗ-' + date.getFullYear() +
+    String(date.getMonth() + 1).padStart(2, '0') +
+    String(date.getDate()).padStart(2, '0');
+}
+
+function getOrderProject() {
+  const pp = projectParams || {};
+  const crm = crmProjectCache || {};
+  const modelName = (MODEL_FILE || '').replace(/\.(dae|xml)$/i, '');
+  const number = orderText(crm.number) || orderText(pp.number);
+  const title = orderText(crm.title) || orderText(pp.title) || modelName || 'Лестница';
+
+  const kmCandidates = [crm.delivery_km, pp.delivery_km];
+  if (deliveryKmKnown) kmCandidates.push(currentKm);
+  let deliveryKm = null;
+  for (const candidate of kmCandidates) {
+    if (candidate === null || candidate === undefined || String(candidate).trim() === '') continue;
+    const km = Number(candidate);
+    if (Number.isFinite(km) && km >= 0) { deliveryKm = km; break; }
+  }
+
+  return {
+    id: crm.id || window.PROJECT_ID || '',
+    number: number,
+    orderNumber: number || orderFallbackNumber(),
+    title: title,
+    clientName: orderText(crm.client_name),
+    clientType: crm.client_type === 'legal' ? 'legal' : orderText(crm.client_type),
+    phone: orderText(crm.phone),
+    email: orderText(crm.email),
+    address: orderText(crm.address),
+    manager: orderText(crm.manager),
+    deliveryKm: deliveryKm,
+    createdAt: orderText(crm.created_at),
+    dateStr: orderDateString()
+  };
+}
+
+function getOrderRequisites() {
+  const pairs = [
+    ['ИНН', ORDER_COMPANY.inn],
+    ['КПП', ORDER_COMPANY.kpp],
+    ['ОГРН', ORDER_COMPANY.ogrn],
+    ['Директор', ORDER_COMPANY.director]
+  ].filter((pair) => !orderIsPlaceholder(pair[1]));
+  if (!pairs.length) return 'Реквизиты уточняются';
+  return pairs.map((pair) => pair[0] + ': ' + orderText(pair[1])).join(' · ');
+}
+
+async function loadCrmProject() {
+  if (!window.INTERNAL_MODE || !window.PROJECT_ID) return null;
+  if (crmProjectCache) return crmProjectCache;
+  if (!crmProjectPromise) {
+    crmProjectPromise = fetch('/api/projects/' + encodeURIComponent(window.PROJECT_ID), {
+      cache: 'no-store',
+      credentials: 'same-origin'
+    })
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (data && typeof data === 'object') crmProjectCache = data;
+        return crmProjectCache;
+      })
+      .catch((error) => {
+        console.warn('Данные проекта CRM не загружены:', error && error.message);
+        return null;
+      })
+      .finally(() => { crmProjectPromise = null; });
+  }
+  return crmProjectPromise;
+}
+
+async function prepareOrderCalculation() {
+  try {
+    await loadAllDXF();
+  } catch (error) {
+    console.warn('DXF для бланка заказа не загрузились:', error && error.message);
+  }
+}
+
+/* Вид сверху для бланка: первая страница PDF проекта, обрезанная до чертежа. */
+const ORDER_PDF_RENDER_SCALE = 1.5;
+let orderPdfTopView = null;
+let orderPdfTopViewPromise = null;
+let orderLogoDataUrl = null;
+let orderLogoPromise = null;
+
+async function getOrderLogoDataUrl() {
+  if (orderLogoDataUrl) return orderLogoDataUrl;
+  if (orderLogoPromise) return orderLogoPromise;
+  orderLogoPromise = (async () => {
+    try {
+      const url = orderAbsoluteUrl('logo.jpg');
+      if (!url) return '';
+      const response = await fetch(url, { cache: 'force-cache', credentials: 'same-origin' });
+      if (!response.ok) return '';
+      const blob = await response.blob();
+      return await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+        reader.onerror = () => resolve('');
+        reader.readAsDataURL(blob);
+      });
+    } catch (error) {
+      console.warn('Логотип для бланка не загружен:', error && error.message);
+      return '';
+    }
+  })().then((value) => {
+    orderLogoDataUrl = value;
+    return value;
+  }).finally(() => {
+    orderLogoPromise = null;
+  });
+  return orderLogoPromise;
+}
+
+function orderCropPdfCanvas(source) {
+  const width = source.width;
+  const height = source.height;
+  if (!width || !height) return source;
+
+  // Отрезаем рамку листа и штамп StairCon внизу, оставляя сам чертёж.
+  const sx = Math.round(width * 0.12);
+  const ex = Math.round(width * 0.92);
+  const sy = Math.round(height * 0.05);
+  const ey = Math.round(height * 0.80);
+  if (ex <= sx || ey <= sy) return source;
+
+  let data;
+  try {
+    const ctx = source.getContext('2d', { willReadFrequently: true });
+    data = ctx.getImageData(sx, sy, ex - sx, ey - sy).data;
+  } catch (error) {
+    return source;
+  }
+
+  const regionWidth = ex - sx;
+  const regionHeight = ey - sy;
+  let minX = ex;
+  let minY = ey;
+  let maxX = sx;
+  let maxY = sy;
+  let found = false;
+
+  for (let y = 0; y < regionHeight; y += 1) {
+    const rowOffset = y * regionWidth * 4;
+    for (let x = 0; x < regionWidth; x += 1) {
+      const offset = rowOffset + x * 4;
+      if (data[offset] < 245 || data[offset + 1] < 245 || data[offset + 2] < 245) {
+        const pageX = sx + x;
+        const pageY = sy + y;
+        if (pageX < minX) minX = pageX;
+        if (pageX > maxX) maxX = pageX;
+        if (pageY < minY) minY = pageY;
+        if (pageY > maxY) maxY = pageY;
+        found = true;
+      }
+    }
+  }
+
+  if (!found || maxX <= minX || maxY <= minY) return source;
+
+  const padX = Math.max(4, Math.round(width * 0.008));
+  const padY = Math.max(4, Math.round(height * 0.006));
+  minX = Math.max(0, minX - padX);
+  minY = Math.max(0, minY - padY);
+  maxX = Math.min(width - 1, maxX + padX);
+  maxY = Math.min(height - 1, maxY + padY);
+
+  const cropWidth = maxX - minX + 1;
+  const cropHeight = maxY - minY + 1;
+  const target = document.createElement('canvas');
+  target.width = cropWidth;
+  target.height = cropHeight;
+  const targetCtx = target.getContext('2d', { alpha: false });
+  targetCtx.fillStyle = '#ffffff';
+  targetCtx.fillRect(0, 0, cropWidth, cropHeight);
+  targetCtx.drawImage(source, minX, minY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+  return target;
+}
+
+async function renderOrderPdfTopView() {
+  if (orderPdfTopView) return orderPdfTopView;
+  if (orderPdfTopViewPromise) return orderPdfTopViewPromise;
+
+  orderPdfTopViewPromise = (async () => {
+    try {
+      const drawings = await loadDrawingsData();
+      const topViewPath = drawings && typeof drawings.topView === 'string' ? drawings.topView : '';
+      if (topViewPath) {
+        const topViewUrl = orderAbsoluteUrl(topViewPath);
+        if (topViewUrl) {
+          orderPdfTopView = { dataUrl: topViewUrl, name: 'Вид сверху', width: 0, height: 0 };
+          return orderPdfTopView;
+        }
+      }
+      const pdf = drawings && Array.isArray(drawings.pdf) ? drawings.pdf[0] : null;
+      if (!pdf) return null;
+      if (typeof pdfjsLib === 'undefined') {
+        console.warn('PDF.js не загружен — вид сверху недоступен.');
+        return null;
+      }
+      if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+        pdfjsLib.GlobalWorkerOptions.workerSrc =
+          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      }
+      const pdfUrl = orderAbsoluteUrl(pdf.url);
+      if (!pdfUrl) return null;
+
+      const documentTask = pdfjsLib.getDocument({ url: pdfUrl });
+      const pdfDocument = await documentTask.promise;
+      const page = await pdfDocument.getPage(1);
+      const viewport = page.getViewport({ scale: ORDER_PDF_RENDER_SCALE });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      const ctx = canvas.getContext('2d', { alpha: false });
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // В фоновой вкладке requestAnimationFrame замирает; на время рендера
+      // переключаем PDF.js на setTimeout, чтобы бланк не завис.
+      const originalRaf = window.requestAnimationFrame;
+      window.requestAnimationFrame = (callback) => window.setTimeout(() => callback(performance.now()), 0);
+      try {
+        await page.render({ canvasContext: ctx, viewport, background: '#ffffff' }).promise;
+      } finally {
+        window.requestAnimationFrame = originalRaf;
+      }
+
+      const cropped = orderCropPdfCanvas(canvas);
+      orderPdfTopView = {
+        dataUrl: cropped.toDataURL('image/png'),
+        name: pdf.name || 'PDF проекта',
+        width: cropped.width,
+        height: cropped.height
+      };
+      return orderPdfTopView;
+    } catch (error) {
+      console.warn('Вид сверху из PDF проекта не подготовлен:', error && error.message);
+      return null;
+    } finally {
+      orderPdfTopViewPromise = null;
+    }
+  })();
+
+  return orderPdfTopViewPromise;
+}
+
+function scheduleOrderPdfTopView() {
+  const delay = window.INTERNAL_MODE ? 1500 : 5000;
+  window.setTimeout(() => {
+    if (window.INTERNAL_MODE) {
+      if (!orderPdfTopView && !orderPdfTopViewPromise) {
+        renderOrderPdfTopView().catch(() => {});
+      }
+      prepareOrderCalculation().catch(() => {});
+    } else {
+      // Публичная страница: заранее готовим DXF для бланка заказа и договора.
+      loadAllDXF().catch(() => {});
+    }
+  }, delay);
+}
+
+function orderHasValue(value) {
+  return value !== null && value !== undefined && String(value).trim() !== '';
+}
+
+function orderNumberText(value, digits) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '';
+  return digits > 0 ? number.toFixed(digits) : String(Math.round(number));
+}
+
+function orderNumberList(list, digits) {
+  if (!Array.isArray(list) || !list.length) return '';
+  return list.map((value) => orderNumberText(value, digits)).filter(Boolean).join(' / ');
+}
+
+function buildOrderParams(params) {
+  const p = params && typeof params === 'object' ? params : {};
+  const rows = [];
+  const add = (label, value) => {
+    if (orderHasValue(value)) rows.push({ label, value: String(value).trim() });
+  };
+  const mm = (value, digits) => {
+    const text = orderNumberText(value, digits || 0);
+    return text ? text + ' мм' : '';
+  };
+
+  const floorName = orderHasValue(p.floorName)
+    ? String(p.floorName).replace(/^этаж\s*:\s*/i, '').trim()
+    : '';
+  add('Этаж', floorName);
+  add('Высота потолка', mm(p.ceiling));
+  add('Высота этажа', mm(p.floorheight));
+  add('Толщина перекрытия', mm(p.floorthick));
+  add('Высота под потолком', mm(p.headroom));
+  add('Маршей', orderNumberText(p.flightCount));
+  add('Подъёмов всего', orderNumberText(p.numRisersTotal));
+  add('Подъёмов по маршам', orderNumberList(p.numRisersList, 0));
+
+  const riseText = Array.isArray(p.riseList) && p.riseList.length > 1
+    ? orderNumberList(p.riseList, 2) + ' мм'
+    : mm(p.rise, 2);
+  add('Высота ступени', riseText);
+
+  const goingText = Array.isArray(p.goingList) && p.goingList.length > 1
+    ? orderNumberList(p.goingList, 1) + ' мм'
+    : mm(p.going, 1);
+  add('Глубина ступени', goingText);
+
+  const recalcText = Array.isArray(p.recalcGoingList) && p.recalcGoingList.length
+    ? orderNumberList(p.recalcGoingList, 0) + ' мм'
+    : (orderHasValue(p.recalcGoing) ? String(p.recalcGoing) + ' мм' : '');
+  add('Расчётная глубина', recalcText);
+
+  add('Ширина марша', mm(p.widths));
+  add('Угол наклона', Array.isArray(p.pitchList) && p.pitchList.length
+    ? p.pitchList.join(' / ')
+    : p.pitch);
+  add('Площадка', p.hasLanding ? 'есть' : 'нет');
+  add('Высота ограждения', mm(p.railingHeight));
+  add('Поручень', orderHasValue(p.handrailDim) ? String(p.handrailDim).replace(/x/gi, '×') + ' мм' : '');
+  const balusterName = orderHasValue(p.balusterName) ? String(p.balusterName).trim() : '';
+  const balusterModel = /^bal0?1$/i.test(balusterName) ? '№ 21' : balusterName;
+  const balusterFallback = orderHasValue(p.balusterDim)
+    ? String(p.balusterDim).replace(/⌀/g, 'Ø').replace(/x/gi, '×') + ' мм'
+    : '';
+  add('Балясина', balusterModel || balusterFallback);
+  add('Столб', orderHasValue(p.newelName) ? String(p.newelName).replace(/x/gi, '×') : '');
+  return rows;
+}
+
+function buildOrderParamsHtml(params) {
+  const rows = buildOrderParams(params);
+  if (!rows.length) return '<div class="order-empty-cell">Параметры не загружены</div>';
+  return '<div class="order-param-grid">' + rows.map((row) =>
+    '<div class="order-param"><span class="order-param-label">' + escapeTechHtml(row.label) + '</span>' +
+    '<span class="order-param-value">' + escapeTechHtml(row.value) + '</span></div>'
+  ).join('') + '</div>';
+}
+
+function orderQuantityText(category) {
+  const qty = Number(category.qty);
+  const count = Number(category.count);
+  if (category.method === 'm2') return (Number.isFinite(qty) ? qty : 0).toFixed(3) + ' м²';
+  if (category.method === 'length') return (Number.isFinite(qty) ? qty : 0).toFixed(2) + ' м';
+  if (category.method === 'count') return (Number.isFinite(count) ? count : 0) + ' шт';
+  return (Number.isFinite(count) ? count : 0) + ' шт';
+}
+
+function orderUnitPriceText(category) {
+  const price = Number(category.unitPrice);
+  if (!Number.isFinite(price) || price <= 0) return '—';
+  const suffix = category.method === 'm2' ? ' / м²' : category.method === 'length' ? ' / м' : category.method === 'count' ? ' / шт' : '';
+  return formatRub(price) + suffix;
+}
+
+function orderCategorySum(category) {
+  const material = Number(category.materialCost);
+  const paint = Number(category.paintCost);
+  return (Number.isFinite(material) ? material : 0) + (Number.isFinite(paint) ? paint : 0);
+}
+
+function orderGroupSum(group) {
+  return (group.categories || []).reduce((sum, category) => sum + orderCategorySum(category), 0);
+}
+
+function getOrderState() {
+  const element = (id) => document.getElementById(id);
+  const prepaymentEl = element('orderPrepayment');
+  const leadEl = element('orderLead');
+  const validityEl = element('orderValidity');
+  const warrantyEl = element('orderWarranty');
+
+  const state = {
+    prepayment: Math.round(orderClampNumber(
+      prepaymentEl ? prepaymentEl.value : orderFormState.prepayment,
+      orderFormState.prepayment,
+      0,
+      100
+    )),
+    leadDays: Math.round(orderClampNumber(
+      leadEl ? leadEl.value : orderFormState.leadDays,
+      orderFormState.leadDays,
+      1,
+      3650
+    )),
+    validityDays: Math.round(orderClampNumber(
+      validityEl ? validityEl.value : orderFormState.validityDays,
+      orderFormState.validityDays,
+      1,
+      3650
+    )),
+    warranty: warrantyEl && orderText(warrantyEl.value)
+      ? orderText(warrantyEl.value).slice(0, 200)
+      : orderFormState.warranty || ORDER_DEFAULTS.warranty
+  };
+  orderFormState = state;
+  return state;
+}
+
+function getOrderPayment(totalValue, state) {
+  const total = Number(totalValue);
+  const roundedTotal = Math.round(Number.isFinite(total) ? total : 0);
+  const amount = Math.round(roundedTotal * state.prepayment / 100);
+  return {
+    amount: amount,
+    balance: roundedTotal - amount
+  };
+}
+
+function buildOrderTableHead(withoutPrices) {
+  const columns = withoutPrices
+    ? ['№', 'Наименование', 'Материал', 'Покраска', 'Кол-во и ед.']
+    : ['№', 'Наименование', 'Материал', 'Покраска', 'Кол-во и ед.', 'Изготовление, ₽', 'Покраска, ₽', 'Сумма, ₽'];
+  return '<thead><tr>' + columns.map((label) => '<th>' + escapeTechHtml(label) + '</th>').join('') + '</tr></thead>';
+}
+
+function buildOrderTableRows(groups, withoutPrices) {
+  const rows = [];
+  const columnCount = withoutPrices ? 5 : 8;
+  let index = 0;
+
+  (groups || []).forEach((group) => {
+    const categories = Array.isArray(group.categories) ? group.categories : [];
+    if (!categories.length) return;
+
+    rows.push(
+      '<tr class="order-group-row"><td colspan="' + columnCount + '">' +
+        '<span class="order-group-name">' + escapeTechHtml(group.title || 'Группа') + '</span>' +
+        (!withoutPrices ? '<span class="order-group-sum">' + formatRub(orderGroupSum(group)) + '</span>' : '') +
+      '</td></tr>'
+    );
+
+    categories.forEach((category) => {
+      index += 1;
+      const note = category.priceNote
+        ? '<div class="order-row-note">' + escapeTechHtml(category.priceNote) + '</div>'
+        : '';
+      const baseCells =
+        '<td class="num">' + index + '</td>' +
+        '<td>' + escapeTechHtml(category.name || '—') + '</td>' +
+        '<td class="mat">' + escapeTechHtml(category.materialName || '—') + note + '</td>' +
+        '<td>' + escapeTechHtml(category.paintName || '—') + '</td>' +
+        '<td class="qty">' + escapeTechHtml(orderQuantityText(category)) + '</td>';
+
+      if (withoutPrices) {
+        rows.push('<tr>' + baseCells + '</tr>');
+      } else {
+        rows.push(
+          '<tr>' + baseCells +
+            '<td class="sum">' + formatRub(category.materialCost) + '</td>' +
+            '<td class="sum">' + formatRub(category.paintCost) + '</td>' +
+            '<td class="sum">' + formatRub(orderCategorySum(category)) + '</td>' +
+          '</tr>'
+        );
+      }
+    });
+  });
+
+  if (!index) {
+    rows.push('<tr><td colspan="' + columnCount + '" class="order-empty-cell">Нет позиций</td></tr>');
+  }
+  return rows.join('');
+}
+
+function buildOrderTableMarkup(groups, withoutPrices) {
+  return '<table class="order-table ' + (withoutPrices ? 'order-table-workshop' : 'order-table-prices') + '">' +
+    buildOrderTableHead(withoutPrices) +
+    '<tbody>' + buildOrderTableRows(groups, withoutPrices) + '</tbody>' +
+  '</table>';
+}
+
+function buildOrderPaymentHtml(payment, state) {
+  return '<div class="order-payment-row"><span>Предоплата ' + escapeTechHtml(String(state.prepayment)) + '% (изготовление и покраска)</span><span>' + formatRub(payment.amount) + '</span></div>' +
+    '<div class="order-payment-row"><span>Остаток по договору</span><span>' + formatRub(payment.balance) + '</span></div>';
+}
+
+function buildOrderTermsPreviewHtml(state) {
+  return '<span>Срок изготовления: <b>' + escapeTechHtml(orderLeadDaysText(state.leadDays)) + '</b></span>' +
+    '<span>Гарантия: <b>' + escapeTechHtml(state.warranty) + '</b></span>';
+}
+
+function updateOrderTermPreview(total) {
+  const state = getOrderState();
+  const payment = getOrderPayment(total, state);
+  const paymentEl = document.getElementById('orderPaymentPreview');
+  const termsEl = document.getElementById('orderTermsPreview');
+  if (paymentEl) paymentEl.innerHTML = buildOrderPaymentHtml(payment, state);
+  if (termsEl) termsEl.innerHTML = buildOrderTermsPreviewHtml(state);
+}
+
+function bindOrderTermInputs(total) {
+  ['orderPrepayment', 'orderLead', 'orderValidity', 'orderWarranty'].forEach((id) => {
+    const input = document.getElementById(id);
+    if (!input) return;
+    input.addEventListener('input', () => updateOrderTermPreview(total));
+    input.addEventListener('change', () => updateOrderTermPreview(total));
+  });
+}
+
+async function buildOrderModal() {
   if (!bomData || !priceData) {
     orderBody.innerHTML = '<div class="price-empty">Нет данных. Загрузите XML и price.json.</div>';
     return;
   }
 
-  const result = calculatePrice(currentKm);
-  orderBody.innerHTML = '';
+  orderBody.innerHTML = '<div class="price-empty"><div class="spinner" style="margin-bottom:12px;"></div>Подготовка расчёта и вида сверху…</div>';
 
-  const today = new Date();
-  const dateStr = today.toLocaleDateString('ru-RU');
-  const modelName = (MODEL_FILE || '').replace(/\.(dae|xml)$/i, '');
-
-  const header = document.createElement('div');
-  header.className = 'order-section';
-  header.innerHTML =
-    '<div style="text-align:center;padding:6px 0 12px;">' +
-      '<div style="font-size:20px;font-weight:800;color:var(--text);">Бланк заказа</div>' +
-      '<div style="font-size:12px;color:var(--muted);margin-top:4px;">' +
-        escapeTechHtml(modelName || 'Лестница') + ' · ' + escapeTechHtml(dateStr) +
-      '</div>' +
-    '</div>';
-  orderBody.appendChild(header);
-
-  const pdfSec = document.createElement('div');
-  pdfSec.className = 'order-section';
-  pdfSec.innerHTML =
-    '<div class="order-section-title">Вид сверху (чертёж)</div>' +
-    '<div class="order-image-frame">' +
-      '<iframe src="' + encodeURI(ORDER_PDF_FILE) + '#toolbar=0&navpanes=0&scrollbar=0"></iframe>' +
-    '</div>';
-  orderBody.appendChild(pdfSec);
-
-  let shotSrc = '';
   try {
-    renderer.render(scene, camera);
-    shotSrc = canvas.toDataURL('image/png');
-  } catch (e) { console.warn('Не удалось сделать снимок:', e); }
+    const [drawings] = await Promise.all([
+      loadDrawingsData(),
+      loadCrmProject(),
+      renderOrderPdfTopView(),
+      getOrderLogoDataUrl(),
+      prepareOrderCalculation()
+    ]);
+    orderDrawingsData = drawings && typeof drawings === 'object' ? drawings : { pdf: [], dxf: [] };
 
-  if (shotSrc) {
-    const shotSec = document.createElement('div');
-    shotSec.className = 'order-section';
-    shotSec.innerHTML =
-      '<div class="order-section-title">3D-вид</div>' +
-      '<div class="order-image-frame"><img id="orderShotImg" src="' + shotSrc + '"></div>';
-    orderBody.appendChild(shotSec);
+    const result = calculatePrice(currentKm);
+    const groups = (result.groups || []).filter((group) => group.categories && group.categories.length);
+    const project = getOrderProject();
+    const state = { ...orderFormState };
+    const contractTotal = (Number(result.materialTotal) || 0) + (Number(result.paintTotal) || 0);
+    const payment = getOrderPayment(contractTotal, state);
+    const excluded = getExcludedSummary();
+    const companyLogo = orderLogoDataUrl || orderAbsoluteUrl('logo.jpg');
+
+    orderSubtitle.textContent = project.title + (project.number ? ' · ' + project.number : '');
+
+    orderBody.innerHTML = '';
+
+    const note = document.createElement('div');
+    note.className = 'order-preview-note';
+    note.textContent = 'Компактный бланк для печати: одна страница A4, вид сверху из PDF проекта, все параметры и расчёт.';
+    orderBody.appendChild(note);
+
+    const header = document.createElement('div');
+    header.className = 'order-section';
+    header.innerHTML =
+      '<div class="order-doc-company">' +
+        (companyLogo
+          ? '<img class="order-doc-logo" src="' + escapeTechHtml(companyLogo) + '" alt="' + escapeTechHtml(ORDER_COMPANY.brand) + '">'
+          : '') +
+        '<div class="order-doc-company-text">' +
+          '<div class="order-doc-company-name">' + escapeTechHtml(ORDER_COMPANY.name) + '</div>' +
+          '<div class="order-doc-company-line">' + escapeTechHtml(ORDER_COMPANY.headerAddress || ORDER_COMPANY.address) + '</div>' +
+          '<div class="order-doc-company-req">' + escapeTechHtml(getOrderRequisites()) + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="order-doc-title">Бланк заказа № ' + escapeTechHtml(project.orderNumber) + ' от ' + escapeTechHtml(project.dateStr) + '</div>';
+    orderBody.appendChild(header);
+
+    const info = document.createElement('div');
+    info.className = 'order-section';
+    const infoLine = (label, value) =>
+      '<div class="order-info-line"><span class="order-info-label">' + escapeTechHtml(label) + ':</span> ' +
+      '<span class="order-info-value">' + escapeTechHtml(orderDisplay(value)) + '</span></div>';
+    const legalBlock = project.clientType === 'legal'
+      ? '<div class="order-info-line order-info-accent">Юридическое лицо</div>' +
+        '<div class="order-info-line"><span class="order-info-label">Реквизиты:</span> <span class="order-info-value">заполняются</span></div>'
+      : '';
+    info.innerHTML =
+      '<div class="order-section-title">Стороны и проект</div>' +
+      '<div class="order-info-grid">' +
+        '<div class="order-info-card">' +
+          '<div class="order-info-title">Исполнитель</div>' +
+          infoLine('Организация', ORDER_COMPANY.name) +
+          infoLine('Телефон', ORDER_COMPANY.phone) +
+          infoLine('E-mail', ORDER_COMPANY.email) +
+        '</div>' +
+        '<div class="order-info-card">' +
+          '<div class="order-info-title">Заказчик</div>' +
+          infoLine('ФИО / название', orderClientField(project.clientName)) +
+          infoLine('Телефон', orderClientField(project.phone)) +
+          infoLine('E-mail', orderClientField(project.email)) +
+          infoLine('Адрес', orderClientField(project.address)) +
+          legalBlock +
+        '</div>' +
+        '<div class="order-info-card order-info-card-wide">' +
+          '<div class="order-info-title">Проект</div>' +
+          infoLine('Название', project.title) +
+          infoLine('Номер', project.orderNumber) +
+          infoLine('Менеджер', project.manager) +
+          infoLine('Доставка', project.deliveryKm != null ? project.deliveryKm + ' км' : '') +
+          infoLine('Дата', project.dateStr) +
+        '</div>' +
+      '</div>';
+    orderBody.appendChild(info);
+
+    const previewMain = document.createElement('div');
+    previewMain.className = 'order-preview-main';
+
+    const drawingSec = document.createElement('div');
+    drawingSec.className = 'order-section';
+    drawingSec.innerHTML = '<div class="order-section-title">Вид сверху · PDF проекта</div>' + buildOrderDrawingsHtml(orderDrawingsData);
+    previewMain.appendChild(drawingSec);
+
+    const paramsSec = document.createElement('div');
+    paramsSec.className = 'order-section';
+    paramsSec.innerHTML =
+      '<div class="order-section-title">Параметры лестницы</div>' +
+      buildOrderParamsHtml(bomData.params);
+    previewMain.appendChild(paramsSec);
+    orderBody.appendChild(previewMain);
+
+    const tableSec = document.createElement('div');
+    tableSec.className = 'order-section';
+    tableSec.innerHTML =
+      '<div class="order-section-title">Состав заказа</div>' +
+      '<div class="order-table-wrap">' + buildOrderTableMarkup(groups, false) + '</div>';
+    orderBody.appendChild(tableSec);
+
+    const deliveryLabel = deliveryEnabled
+      ? 'Доставка' + (result.deliveryKm ? ' (' + result.deliveryKm + ' км)' : '')
+      : 'Доставка — не включена';
+    const montageLabel = montageEnabled ? 'Монтаж' : 'Монтаж — не включён';
+    const totalsSec = document.createElement('div');
+    totalsSec.className = 'order-section';
+    totalsSec.innerHTML =
+      '<div class="order-section-title">Итоги</div>' +
+      '<div class="order-totals">' +
+        '<div class="order-totals-row"><span>Изготовление</span><span>' + formatRub(result.materialTotal) + '</span></div>' +
+        '<div class="order-totals-row"><span>Покраска</span><span>' + formatRub(result.paintTotal) + '</span></div>' +
+        '<div class="order-totals-row subtotal"><span>Изготовление и покраска</span><span>' + formatRub(contractTotal) + '</span></div>' +
+        '<div class="order-totals-row"><span>' + escapeTechHtml(deliveryLabel) + '</span><span>' + formatRub(deliveryEnabled ? result.deliveryCost : 0) + '</span></div>' +
+        '<div class="order-totals-row"><span>' + escapeTechHtml(montageLabel) + '</span><span>' + formatRub(montageEnabled ? result.montageCost : 0) + '</span></div>' +
+        '<div class="order-totals-row total"><span>ИТОГО</span><span>' + formatRub(result.total) + '</span></div>' +
+      '</div>' +
+      '<div class="order-payment-preview" id="orderPaymentPreview">' + buildOrderPaymentHtml(payment, state) +
+        '<div class="order-doc-note">Доставка и монтаж оплачиваются отдельно по факту.</div>' +
+      '</div>';
+    orderBody.appendChild(totalsSec);
+
+    const termsSec = document.createElement('div');
+    termsSec.className = 'order-section';
+    termsSec.innerHTML =
+      '<div class="order-section-title">Условия</div>' +
+      '<div class="order-terms-grid">' +
+        '<label class="order-term-field"><span>Предоплата, %</span>' +
+          '<input type="number" id="orderPrepayment" min="0" max="100" step="1" value="' + escapeTechHtml(String(state.prepayment)) + '">' +
+        '</label>' +
+        '<label class="order-term-field"><span>Срок изготовления, рабочих дней</span>' +
+          '<input type="number" id="orderLead" min="1" step="1" value="' + escapeTechHtml(String(state.leadDays)) + '">' +
+        '</label>' +
+        '<label class="order-term-field"><span>Гарантия</span>' +
+          '<input type="text" id="orderWarranty" maxlength="200" value="' + escapeTechHtml(state.warranty) + '">' +
+        '</label>' +
+      '</div>' +
+      '<div class="order-terms-preview" id="orderTermsPreview">' + buildOrderTermsPreviewHtml(state) + '</div>' +
+      (excluded.length ? '<div class="order-excluded">Исключено из заказа: ' + escapeTechHtml(excluded.join(', ')) + '</div>' : '') +
+      '<div class="order-signatures">' +
+        '<div class="order-signature-row"><span>Исполнитель ______________________</span><span>Заказчик ______________________</span></div>' +
+        '<div class="order-signature-row"><span>Дата: «___» ____________ 20___ г.</span><span>Дата: «___» ____________ 20___ г.</span></div>' +
+      '</div>';
+    orderBody.appendChild(termsSec);
+
+    bindOrderTermInputs(result.total);
+  } catch (error) {
+    console.error('Не удалось построить бланк заказа:', error);
+    orderBody.innerHTML = '<div class="price-empty">Не удалось подготовить бланк заказа. Обновите страницу и попробуйте снова.</div>';
   }
-
-  if (bomData.params) {
-    const p = bomData.params;
-    const rows = [];
-    const push = (label, val) => { if (val) rows.push('<div class="param-row"><span class="label">' + escapeTechHtml(label) + '</span><span class="value">' + escapeTechHtml(val) + '</span></div>'); };
-
-    if (p.floorheight)  push('Высота этажа',     Math.round(p.floorheight) + ' мм');
-    if (p.flightCount > 1) {
-      push('Маршей', p.flightCount);
-      if (p.numRisersList && p.numRisersList.length) {
-        push('Подъёмов по маршам', p.numRisersList.map(n => Math.round(n)).join(' / '));
-      }
-      if (p.riseList && p.riseList.length) {
-        const uniq = Array.from(new Set(p.riseList.map(v => Number(v).toFixed(1))));
-        push('Высота ступени', uniq.join(' / ') + ' мм');
-      }
-      if (p.goingList && p.goingList.length) {
-        push('Глубина ступени', p.goingList.map(v => Number(v).toFixed(1)).join(' / ') + ' мм');
-      }
-      if (p.pitchList && p.pitchList.length) push('Угол наклона', p.pitchList.join(' / '));
-    } else {
-      if (p.rise)      push('Высота ступени',   Math.round(p.rise) + ' мм');
-      if (p.going)     push('Глубина ступени',  p.going.toFixed(1) + ' мм');
-      if (p.numRisers) push('Количество подъёмов', p.numRisers);
-      if (p.pitch)     push('Угол наклона',     p.pitch);
-    }
-    if (p.widths)       push('Ширина марша',     Math.round(p.widths) + ' мм');
-    if (p.hasLanding)   push('Площадка',         p.landingDepth ? Math.round(p.landingDepth) + ' мм' : 'есть');
-    else if (p.recalcGoingList && p.recalcGoingList.length > 1) {
-      push('Расчётная глубина', p.recalcGoingList.map(v => Math.round(v)).join(' / ') + ' мм');
-    }
-    if (p.railingHeight) push('Высота ограждения', p.railingHeight + ' мм');
-    push('Балясина', '45 мм (стандарт)');
-    if (p.balusterDim) push('Посадочное место балясины', p.balusterDim.replace('⌀', 'Ø') + ' мм');
-
-    if (rows.length) {
-      const paramsSec = document.createElement('div');
-      paramsSec.className = 'order-section';
-      paramsSec.innerHTML =
-        '<div class="order-section-title">Параметры лестницы</div>' + rows.join('');
-      orderBody.appendChild(paramsSec);
-    }
-  }
-
-  const grouped = classifyBOMItems(bomData.items, bomData.params.floorName ? parseInt(bomData.params.floorName.match(/(\d+)/)[1], 10) : 1);
-
-  const tableRows = [];
-  let idx = 0;
-  for (const catKey in priceData.categories) {
-    const cat = priceData.categories[catKey];
-    const items = grouped.stair[catKey];
-    if (!items || !items.length) continue;
-
-    const found = result.groups[0].categories.find(c => c.key === catKey);
-    if (!found) continue;
-
-    idx++;
-    tableRows.push(
-      '<tr>' +
-        '<td class="num">' + idx + '</td>' +
-        '<td>' + escapeTechHtml(cat.name) + '</td>' +
-        '<td class="mat">' + escapeTechHtml(found.materialName) + '</td>' +
-        '<td class="qty">' + found.count + ' шт</td>' +
-        '<td class="sum">' + formatRub(found.materialCost) + '</td>' +
-      '</tr>'
-    );
-  }
-
-  const tableSec = document.createElement('div');
-  tableSec.className = 'order-section';
-  tableSec.innerHTML =
-    '<div class="order-section-title">Состав заказа</div>' +
-    '<table class="order-table">' +
-      '<thead><tr>' +
-        '<th>№</th><th>Наименование</th><th>Материал</th><th>Кол-во</th><th>Сумма</th>' +
-      '</tr></thead>' +
-      '<tbody>' + tableRows.join('') + '</tbody>' +
-    '</table>';
-  orderBody.appendChild(tableSec);
-
-  const totalsSec = document.createElement('div');
-  totalsSec.className = 'order-section';
-  totalsSec.innerHTML =
-    '<div class="order-section-title">Итоги</div>' +
-    '<div class="order-totals">' +
-        '<div class="order-totals-row"><span>Материал</span><span>' + formatRub(result.materialTotal) + '</span></div>' +
-      '<div class="order-totals-row"><span>Покраска</span><span>' + formatRub(result.paintTotal) + '</span></div>' +
-      '<div class="order-totals-row"><span>Доставка (' + result.deliveryKm + ' км)</span><span>' + formatRub(result.deliveryCost) + '</span></div>' +
-      '<div class="order-totals-row"><span>Монтаж</span><span>' + formatRub(result.montageCost) + '</span></div>' +
-      '<div class="order-totals-row total"><span>ИТОГО</span><span>' + formatRub(result.total) + '</span></div>' +
-    '</div>';
-  orderBody.appendChild(totalsSec);
-
-  const leadSec = document.createElement('div');
-  leadSec.className = 'order-section';
-  leadSec.innerHTML =
-    '<div class="order-lead-row">' +
-      '🕐 Срок изготовления:' +
-      '<input type="number" id="orderLead" min="1" step="1" value="30">' +
-      '<span class="unit">рабочих дней</span>' +
-    '</div>';
-  orderBody.appendChild(leadSec);
 }
 
-document.getElementById('orderDownload').addEventListener('click', () => {
-  const a = document.createElement('a');
-  a.href = encodeURI(ORDER_PDF_FILE);
-  a.download = ORDER_PDF_FILE;
-  a.target = '_blank';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  showToast('PDF открыт. Сохраните через Ctrl+S', true);
-});
+function buildOrderDrawingsHtml(drawings) {
+  const pdf = drawings && Array.isArray(drawings.pdf) ? drawings.pdf[0] : null;
+  const pdfUrl = pdf ? orderAbsoluteUrl(pdf.url) : '';
+  const topView = orderPdfTopView;
+
+  if (topView) {
+    return '<div class="order-drawing-label">Вид сверху из PDF проекта' +
+        (pdf && pdf.name ? ' · ' + escapeTechHtml(pdf.name) : '') + '</div>' +
+      '<div class="order-image-frame order-topview-frame">' +
+        '<img src="' + topView.dataUrl + '" alt="Вид сверху из PDF проекта">' +
+      '</div>' +
+      (pdfUrl
+        ? '<div class="order-drawing-actions">' +
+            '<a class="btn" href="' + escapeTechHtml(pdfUrl) + '" target="_blank" rel="noopener">Открыть PDF проекта</a>' +
+          '</div>'
+        : '');
+  }
+
+  if (!pdf) return '<div class="price-empty">PDF проекта не загружен. Загрузите PDF в карточке заявки.</div>';
+  return '<div class="price-empty">Вид сверху готовится из PDF проекта…</div>' +
+    (pdfUrl
+      ? '<div class="order-drawing-actions">' +
+          '<a class="btn" href="' + escapeTechHtml(pdfUrl) + '" target="_blank" rel="noopener">Открыть PDF проекта</a>' +
+        '</div>'
+      : '');
+}
+
+const ORDER_PRINT_CSS = `
+@page { size: A4 portrait; margin: 8mm 9mm; }
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: #fff; color: #000; }
+body { font-family: "Segoe UI", Arial, sans-serif; font-size: 6.8pt; line-height: 1.25; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.page { width: 192mm; min-height: 281mm; display: flex; flex-direction: column; }
+.doc-header { display: flex; gap: 3.5mm; align-items: flex-start; border-bottom: 1.4pt solid #000; padding-bottom: 2mm; }
+.doc-logo { width: 17mm; height: auto; display: block; flex: 0 0 auto; }
+.doc-company { flex: 1; min-width: 0; }
+.doc-company-name { font-size: 11pt; font-weight: 800; line-height: 1.15; }
+.doc-company-line { font-size: 6.3pt; line-height: 1.3; color: #222; }
+.doc-company-req { font-size: 6.1pt; line-height: 1.3; margin-top: 0.6mm; }
+.doc-title { text-align: right; min-width: 62mm; }
+.doc-title h1 { font-size: 13pt; margin: 0; line-height: 1.1; }
+.doc-title-number { font-size: 7.3pt; font-weight: 600; margin-top: 1mm; white-space: nowrap; }
+.doc-workshop { font-size: 8pt; font-weight: 800; margin-top: 1mm; }
+.parties { display: flex; gap: 2.5mm; margin-top: 2.5mm; }
+.party { flex: 1; min-width: 0; border: 0.5pt solid #000; padding: 1.5mm 2mm; }
+.party h2 { font-size: 6.1pt; text-transform: uppercase; letter-spacing: .35px; margin: 0 0 0.8mm; font-weight: 800; }
+.party p { margin: 0.25mm 0; font-size: 6.5pt; line-height: 1.25; overflow-wrap: anywhere; }
+.party p.strong { font-weight: 700; }
+.main { display: flex; gap: 3mm; margin-top: 2.5mm; align-items: flex-start; }
+.drawing { flex: 0 0 120mm; max-width: 120mm; }
+.drawing-frame { border: 0.5pt solid #000; padding: 1.2mm; background: #fff; }
+.drawing-frame img { display: block; width: 100%; height: auto; }
+.drawing-empty { height: 120mm; display: flex; align-items: center; justify-content: center; font-size: 7pt; color: #333; }
+.drawing-caption { font-size: 6.1pt; line-height: 1.25; margin-top: 0.8mm; color: #222; }
+.side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2mm; }
+.block { border: 0.5pt solid #000; padding: 1.5mm 2mm; }
+.block-title { font-size: 6.1pt; text-transform: uppercase; letter-spacing: .35px; margin: 0 0 1mm; font-weight: 800; }
+.params-grid { display: flex; flex-direction: column; gap: 0.25mm; }
+.param { display: flex; align-items: baseline; justify-content: space-between; gap: 2mm; border-bottom: 0.3pt dotted #aaa; padding-bottom: 0.35mm; font-size: 6.2pt; line-height: 1.18; }
+.param-label { flex: 1; min-width: 0; color: #222; }
+.param-value { flex: 0 0 auto; font-weight: 600; text-align: right; white-space: nowrap; }
+.total-row { display: flex; justify-content: space-between; gap: 2mm; padding: 0.45mm 0; border-bottom: 0.3pt solid #ccc; font-size: 6.6pt; }
+.total-row span:last-child { font-weight: 600; text-align: right; white-space: nowrap; }
+.total-row.subtotal { border-top: 0.6pt solid #000; font-weight: 700; }
+.total-row.grand { border-top: 0.9pt solid #000; border-bottom: 0.9pt solid #000; font-size: 8.4pt; font-weight: 800; margin-top: 0.5mm; padding: 0.9mm 0; }
+.total-row.sub { font-size: 6.3pt; border-bottom: none; }
+.terms p { margin: 0.45mm 0; font-size: 6.2pt; line-height: 1.22; }
+.offer-note { font-weight: 700; margin-top: 1mm; }
+.small { font-size: 6.2pt; }
+.signatures { font-size: 6.3pt; }
+.sig-line { border-top: 0.5pt solid #000; padding-top: 1mm; margin-top: 3.5mm; }
+.sig-date { margin-top: 2mm; }
+.composition { margin-top: 2.5mm; page-break-inside: avoid; }
+.order-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 6.7pt; line-height: 1.18; }
+.order-table th, .order-table td { border: 0.5pt solid #000; padding: 0.7mm 0.8mm; vertical-align: top; overflow-wrap: anywhere; }
+.order-table th { background: #e9e9e9; font-weight: 700; text-align: left; }
+.order-table thead { display: table-header-group; }
+.order-table tr { page-break-inside: avoid; }
+.order-table td.num { text-align: right; }
+.order-table td.qty, .order-table td.price, .order-table td.sum { text-align: right; white-space: nowrap; }
+.order-table .order-group-row td { background: #ededed; font-weight: 700; border-top: 0.9pt solid #000; padding: 1mm 0.8mm; }
+.order-group-name { display: inline-block; }
+.order-group-sum { float: right; }
+.order-row-note { font-size: 5.7pt; color: #333; margin-top: 0.3mm; }
+.order-empty-cell { text-align: center; }
+.order-table-prices th:nth-child(1), .order-table-prices td:nth-child(1) { width: 5mm; }
+.order-table-prices th:nth-child(2), .order-table-prices td:nth-child(2) { width: 37mm; }
+.order-table-prices th:nth-child(3), .order-table-prices td:nth-child(3) { width: 33mm; }
+.order-table-prices th:nth-child(4), .order-table-prices td:nth-child(4) { width: 25mm; }
+.order-table-prices th:nth-child(5), .order-table-prices td:nth-child(5) { width: 19mm; }
+.order-table-prices th:nth-child(6), .order-table-prices td:nth-child(6) { width: 23mm; }
+.order-table-prices th:nth-child(7), .order-table-prices td:nth-child(7) { width: 23mm; }
+.order-table-prices th:nth-child(8), .order-table-prices td:nth-child(8) { width: 25mm; }
+.order-table-workshop th:nth-child(1), .order-table-workshop td:nth-child(1) { width: 6mm; }
+.order-table-workshop th:nth-child(2), .order-table-workshop td:nth-child(2) { width: 55mm; }
+.order-table-workshop th:nth-child(3), .order-table-workshop td:nth-child(3) { width: 52mm; }
+.order-table-workshop th:nth-child(4), .order-table-workshop td:nth-child(4) { width: 34mm; }
+.order-table-workshop th:nth-child(5), .order-table-workshop td:nth-child(5) { width: 32mm; }
+.doc-footer { margin-top: auto; padding-top: 1.5mm; border-top: 0.5pt solid #000; display: flex; justify-content: space-between; gap: 3mm; font-size: 5.7pt; color: #222; }
+.dense .order-table { font-size: 6.1pt; }
+.dense .order-table th, .dense .order-table td { padding: 0.45mm 0.6mm; }
+.dense .param { font-size: 6pt; }
+.dense .drawing { flex-basis: 112mm; max-width: 112mm; }
+a { color: #000; text-decoration: none; }
+@media screen {
+  html, body { background: #e9edf2; }
+  body { padding: 8mm; }
+  .page { background: #fff; margin: 0 auto; box-shadow: 0 2mm 8mm rgba(0,0,0,.15); }
+}
+@media print {
+  html, body { background: #fff; }
+  .page { box-shadow: none; margin: 0; }
+}
+`;
+
+function buildOrderPrintHtml() {
+  const result = calculatePrice(currentKm);
+  const state = getOrderState();
+  const project = getOrderProject();
+  const groups = (result.groups || []).filter((group) => group.categories && group.categories.length);
+  const drawings = orderDrawingsData || { pdf: [], dxf: [] };
+  const pdf = Array.isArray(drawings.pdf) ? drawings.pdf[0] : null;
+  const pdfUrl = pdf ? orderAbsoluteUrl(pdf.url) : '';
+  const logoUrl = orderLogoDataUrl || orderAbsoluteUrl('logo.jpg');
+  const excluded = getExcludedSummary();
+  const total = Number(result.total) || 0;
+  const contractTotal = (Number(result.materialTotal) || 0) + (Number(result.paintTotal) || 0);
+  const payment = getOrderPayment(contractTotal, state);
+  const requisites = getOrderRequisites();
+  const footerRequisites = [
+    orderIsPlaceholder(ORDER_COMPANY.inn) ? '' : 'ИНН ' + ORDER_COMPANY.inn,
+    orderIsPlaceholder(ORDER_COMPANY.kpp) ? '' : 'КПП ' + ORDER_COMPANY.kpp
+  ].filter(Boolean).join(' · ');
+  const withoutPrices = !!(document.getElementById('orderWithoutPrices') && document.getElementById('orderWithoutPrices').checked);
+  const params = bomData && bomData.params ? bomData.params : {};
+  const paramRows = buildOrderParams(params);
+  const topView = orderPdfTopView;
+  const categoryCount = groups.reduce((sum, group) => sum + (group.categories || []).length, 0);
+  const dense = categoryCount > 13;
+
+  const deliveryLabel = deliveryEnabled
+    ? 'Доставка' + (result.deliveryKm ? ' (' + result.deliveryKm + ' км)' : '')
+    : 'Доставка — не включена';
+  const montageLabel = montageEnabled ? 'Монтаж' : 'Монтаж — не включён';
+
+  const paramHtml = paramRows.map((row) =>
+    '<div class="param"><span class="param-label">' + escapeTechHtml(row.label) + '</span>' +
+    '<span class="param-value">' + escapeTechHtml(row.value) + '</span></div>'
+  ).join('');
+
+  const drawingHtml = topView
+    ? '<div class="drawing-frame"><img src="' + topView.dataUrl + '" alt="Вид сверху из PDF проекта"></div>' +
+      '<div class="drawing-caption">Вид сверху из PDF проекта' +
+        (pdf && pdf.name ? ' · ' + escapeTechHtml(pdf.name) : '') +
+        (pdfUrl ? ' · <a href="' + escapeTechHtml(pdfUrl) + '">открыть PDF</a>' : '') +
+      '</div>'
+    : '<div class="drawing-frame drawing-empty">PDF проекта не загружен</div>';
+
+  const totalsHtml = withoutPrices
+    ? '<section class="block totals"><h2 class="block-title">Стоимость</h2><p class="small">Цены не указаны — вариант для цеха.</p></section>'
+    : '<section class="block totals"><h2 class="block-title">Итоги</h2>' +
+        '<div class="total-row"><span>Изготовление</span><span>' + formatRub(result.materialTotal) + '</span></div>' +
+        '<div class="total-row"><span>Покраска</span><span>' + formatRub(result.paintTotal) + '</span></div>' +
+        '<div class="total-row subtotal"><span>Изготовление и покраска</span><span>' + formatRub(contractTotal) + '</span></div>' +
+        '<div class="total-row"><span>' + escapeTechHtml(deliveryLabel) + '</span><span>' + formatRub(deliveryEnabled ? result.deliveryCost : 0) + '</span></div>' +
+        '<div class="total-row"><span>' + escapeTechHtml(montageLabel) + '</span><span>' + formatRub(montageEnabled ? result.montageCost : 0) + '</span></div>' +
+        '<div class="total-row grand"><span>ИТОГО</span><span>' + formatRub(total) + '</span></div>' +
+        '<div class="total-row sub"><span>Предоплата ' + escapeTechHtml(String(state.prepayment)) + '% (изготовление и покраска)</span><span>' + formatRub(payment.amount) + '</span></div>' +
+        '<div class="total-row sub"><span>Остаток по договору</span><span>' + formatRub(payment.balance) + '</span></div>' +
+        '<p class="small">Доставка и монтаж оплачиваются отдельно по факту.</p>' +
+      '</section>';
+
+  const partiesHtml =
+    '<section class="parties">' +
+      '<div class="party"><h2>Исполнитель</h2>' +
+        '<p class="strong">' + escapeTechHtml(ORDER_COMPANY.name) + '</p>' +
+        (ORDER_COMPANY.phone ? '<p>Тел.: ' + escapeTechHtml(ORDER_COMPANY.phone) + '</p>' : '') +
+        (ORDER_COMPANY.email ? '<p>E-mail: ' + escapeTechHtml(ORDER_COMPANY.email) + '</p>' : '') +
+      '</div>' +
+      '<div class="party"><h2>Заказчик</h2>' +
+        '<p class="strong">' + escapeTechHtml(orderClientField(project.clientName)) + '</p>' +
+        '<p>Тел.: ' + escapeTechHtml(orderClientField(project.phone)) + '</p>' +
+        '<p>E-mail: ' + escapeTechHtml(orderClientField(project.email)) + '</p>' +
+        '<p>Адрес: ' + escapeTechHtml(orderClientField(project.address)) + '</p>' +
+        (project.clientType === 'legal' ? '<p class="strong">Юридическое лицо · реквизиты заполняются</p>' : '') +
+      '</div>' +
+      '<div class="party"><h2>Проект</h2>' +
+        '<p class="strong">' + escapeTechHtml(project.title) + '</p>' +
+        '<p>Номер: ' + escapeTechHtml(project.orderNumber) + '</p>' +
+        '<p>Менеджер: ' + escapeTechHtml(orderDisplay(project.manager)) + '</p>' +
+        '<p>Доставка: ' + escapeTechHtml(project.deliveryKm != null ? project.deliveryKm + ' км' : '—') + '</p>' +
+        '<p>Дата: ' + escapeTechHtml(project.dateStr) + '</p>' +
+      '</div>' +
+    '</section>';
+
+  const termsHtml =
+    '<section class="block terms"><h2 class="block-title">Условия</h2>' +
+      '<p>Срок изготовления: <b>' + escapeTechHtml(orderLeadDaysText(state.leadDays)) + '</b></p>' +
+      '<p>Гарантия: <b>' + escapeTechHtml(state.warranty) + '</b></p>' +
+      (excluded.length ? '<p>Исключено из заказа: ' + escapeTechHtml(excluded.join(', ')) + '</p>' : '') +
+    '</section>';
+
+  const signaturesHtml =
+    '<div class="signatures">' +
+      '<div class="sig-line">Исполнитель ______________________</div>' +
+      '<div class="sig-line">Заказчик ______________________</div>' +
+      '<div class="sig-date">Дата: «___» ____________ 20___ г.</div>' +
+    '</div>';
+
+  return '<!doctype html>' +
+    '<html lang="ru"><head><meta charset="utf-8">' +
+    '<title>Бланк заказа № ' + escapeTechHtml(project.orderNumber) + ' от ' + escapeTechHtml(project.dateStr) + '</title>' +
+    '<style>' + ORDER_PRINT_CSS + '</style>' +
+    '</head><body><div class="page' + (dense ? ' dense' : '') + '">' +
+      '<header class="doc-header">' +
+        (logoUrl ? '<img class="doc-logo" src="' + escapeTechHtml(logoUrl) + '" alt="' + escapeTechHtml(ORDER_COMPANY.brand) + '">' : '') +
+        '<div class="doc-company">' +
+          '<div class="doc-company-name">' + escapeTechHtml(ORDER_COMPANY.name) + '</div>' +
+          '<div class="doc-company-line">' + escapeTechHtml(ORDER_COMPANY.headerAddress || ORDER_COMPANY.address) + '</div>' +
+          '<div class="doc-company-req">' + escapeTechHtml(requisites) + '</div>' +
+        '</div>' +
+        '<div class="doc-title">' +
+          '<h1>Бланк заказа</h1>' +
+          '<div class="doc-title-number">№ ' + escapeTechHtml(project.orderNumber) + ' от ' + escapeTechHtml(project.dateStr) + '</div>' +
+          (withoutPrices ? '<div class="doc-workshop">Для цеха (без цен)</div>' : '') +
+        '</div>' +
+      '</header>' +
+      partiesHtml +
+      '<section class="main">' +
+        '<div class="drawing">' + drawingHtml + '</div>' +
+        '<div class="side">' +
+          '<section class="block params"><h2 class="block-title">Параметры лестницы</h2><div class="params-grid">' + paramHtml + '</div></section>' +
+          totalsHtml +
+          termsHtml +
+          signaturesHtml +
+        '</div>' +
+      '</section>' +
+      '<section class="composition"><h2 class="block-title">Состав заказа</h2>' + buildOrderTableMarkup(groups, withoutPrices) + '</section>' +
+      '<footer class="doc-footer">' +
+        '<span>' + escapeTechHtml(ORDER_COMPANY.name) +
+          (footerRequisites ? ' · ' + escapeTechHtml(footerRequisites) : '') + '</span>' +
+        '<span>Бланк заказа · стр. 1 из 1</span>' +
+      '</footer>' +
+    '</div></body></html>';
+}
+
+async function printOrderForm() {
+  let printWindow = null;
+  try {
+    printWindow = window.open('', '_blank', 'width=900,height=1200');
+  } catch (error) {
+    printWindow = null;
+  }
+
+  if (printWindow && printWindow.document) {
+    try {
+      printWindow.document.open();
+      printWindow.document.write(
+        '<!doctype html><meta charset="utf-8"><title>Бланк заказа</title>' +
+        '<body style="font:14px system-ui;padding:24px;color:#111">Подготовка бланка заказа…</body>'
+      );
+      printWindow.document.close();
+    } catch (error) {
+      console.warn('Не удалось показать окно подготовки:', error);
+    }
+  }
+
+  let html = '';
+  try {
+    if (!orderPdfTopView) await renderOrderPdfTopView();
+    if (!orderLogoDataUrl) await getOrderLogoDataUrl();
+    await prepareOrderCalculation();
+    html = buildOrderPrintHtml();
+  } catch (error) {
+    console.error('Не удалось подготовить печать бланка заказа:', error);
+    showToast('Не удалось подготовить бланк заказа', true);
+    return;
+  }
+
+  if (printWindow && printWindow.document) {
+    try {
+      printWindow.document.open();
+      printWindow.document.write(html);
+      printWindow.document.close();
+      printWindow.focus();
+
+      const launch = () => {
+        try { printWindow.print(); }
+        catch (error) { console.warn('Печать недоступна:', error); }
+      };
+      const images = Array.from(printWindow.document.images || []);
+      const pending = images.filter((image) => !image.complete);
+      if (!pending.length) {
+        window.setTimeout(launch, 350);
+      } else {
+        let remaining = pending.length;
+        const done = () => {
+          remaining -= 1;
+          if (remaining <= 0) window.setTimeout(launch, 250);
+        };
+        pending.forEach((image) => {
+          image.addEventListener('load', done, { once: true });
+          image.addEventListener('error', done, { once: true });
+        });
+        window.setTimeout(launch, 2500);
+      }
+      return;
+    } catch (error) {
+      console.warn('Не удалось открыть окно печати:', error);
+    }
+  }
+
+  showToast('Всплывающее окно заблокировано. Откройте бланк в новой вкладке и сохраните как PDF.', true);
+  try {
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const blobUrl = URL.createObjectURL(blob);
+    const fallbackWindow = window.open(blobUrl, '_blank');
+    if (!fallbackWindow) {
+      URL.revokeObjectURL(blobUrl);
+      showToast('Не удалось открыть бланк. Разрешите всплывающие окна для этого сайта.', true);
+    } else {
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+    }
+  } catch (error) {
+    console.error('Резервное открытие бланка не удалось:', error);
+    showToast('Не удалось открыть бланк заказа', true);
+  }
+}
+
+document.getElementById('orderDownload').addEventListener('click', printOrderForm);
 
 document.getElementById('orderShare').addEventListener('click', async () => {
   const url = location.origin + location.pathname + location.search;
@@ -5832,6 +6814,26 @@ setupGeneratePriceButton();
 document.getElementById('btnParams').addEventListener('click', paramsModal.openFn);
 document.getElementById('btnDrawings').addEventListener('click', drawingsModal.openFn);
 document.getElementById('btnOrder').addEventListener('click', orderModal.openFn);
+document.getElementById('btnContract').addEventListener('click', async () => {
+  try {
+    showToast('Подготовка договора…');
+    await prepareOrderCalculation();
+    const result = calculatePrice(currentKm);
+    if (!result.groups || !result.groups.length) {
+      showToast('Нет данных для договора', true);
+      return;
+    }
+    printContract({
+      project: getOrderProject(),
+      company: ORDER_COMPANY,
+      contractTotal: (Number(result.materialTotal) || 0) + (Number(result.paintTotal) || 0),
+      date: new Date()
+    });
+  } catch (error) {
+    console.error('Не удалось сформировать договор:', error);
+    showToast('Не удалось сформировать договор', true);
+  }
+});
 document.getElementById('btnTechCard').addEventListener('click', techCardModal.openFn);
 document.getElementById('techCardRefresh').addEventListener('click', () => {
   buildTechCardModal();
@@ -6111,6 +7113,7 @@ document.getElementById('btnShowOpeningDims').addEventListener('click', (e) => {
   await loadProjectParams();
   await loadBOM();
   loadCollada(MODEL_FILE, MODEL_FILE);
+  scheduleOrderPdfTopView();
 })();
 
 console.log('%c◈ 3D Viewer готов', 'color:#5b8cff;font-weight:bold;font-size:14px');
