@@ -62,11 +62,11 @@ const CONTRACT_SECTIONS = [
   {
     title: '5. Финансовые условия и порядок расчета',
     clauses: [
-      '5.1. Стоимость работ Подрядчика по настоящему Договору составляет: {{AMOUNT_RUB}} ({{AMOUNT_WORDS}}) {{RUBLE_WORD}} {{KOPECKS}} {{KOPECK_WORD}}. НДС не облагается в связи с применением упрощенной системы налогообложения на основании п. 2 статьи 346.11 главы 26.2 НК РФ. Доставка и монтаж в цену работ не входят и оплачиваются Заказчиком отдельно в соответствии с п. 5.2 настоящего Договора.',
+      '5.1. Общая стоимость по настоящему Договору составляет: {{AMOUNT_RUB}} ({{AMOUNT_WORDS}}) {{RUBLE_WORD}} {{KOPECKS}} {{KOPECK_WORD}}, в том числе: работы по изготовлению и покраске — {{WORKS_AMOUNT}}; доставка — {{DELIVERY_AMOUNT}}; монтаж — {{MONTAGE_AMOUNT}}. НДС не облагается в связи с применением упрощенной системы налогообложения на основании п. 2 статьи 346.11 главы 26.2 НК РФ.',
       '5.2. Стороны устанавливают следующий порядок расчетов:',
-      '— в день подписания настоящего Договора Заказчик оплачивает Подрядчику 50 (пятьдесят) процентов стоимости работ, указанной в п. 5.1 настоящего Договора;',
-      '— оставшиеся 50 (пятьдесят) процентов Заказчик оплачивает Подрядчику до вывоза результата работ после уведомления Подрядчика о готовности результата работ;',
-      '— доставка и монтаж оплачиваются отдельно по факту их выполнения;',
+      '— в день подписания настоящего Договора Заказчик оплачивает Подрядчику 50 (пятьдесят) процентов стоимости работ по изготовлению и покраске, что составляет {{PREPAY_AMOUNT}};',
+      '— оставшиеся 50 (пятьдесят) процентов стоимости работ по изготовлению и покраске, что составляет {{REMAINDER_AMOUNT}}, Заказчик оплачивает Подрядчику до вывоза результата работ после уведомления Подрядчика о готовности результата работ;',
+      '— доставка и монтаж оплачиваются по факту их выполнения;',
       '— для долгосрочных заказов промежуточные платежи и сроки их внесения устанавливаются отдельным приложением к настоящему Договору.',
       'Суммы платежей округляются до целых рублей; окончательный расчет производится с учетом округления.',
       '5.3. Оплата Заказчиком Подрядчику суммы, указанной в п. 5.1 настоящего Договора, производится одним из следующих способов:',
@@ -231,6 +231,13 @@ function amountParts(total) {
   };
 }
 
+function formatMoney(value) {
+  return new Intl.NumberFormat('ru-RU', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(Number(value) || 0) + ' ₽';
+}
+
 function clauseHtml(text) {
   const trimmed = String(text || '').trim();
   if (!trimmed) return '';
@@ -238,8 +245,14 @@ function clauseHtml(text) {
   return '<p>' + esc(trimmed) + '</p>';
 }
 
-function buildContractHtml({ project, company, contractTotal, date }) {
-  const amount = amountParts(contractTotal);
+function buildContractHtml({ project, company, contractTotal, contractWorks, deliveryCost, montageCost, date }) {
+  const total = Number(contractTotal) || 0;
+  const works = contractWorks === undefined || contractWorks === null
+    ? total
+    : (Number(contractWorks) || 0);
+  const delivery = Number(deliveryCost) || 0;
+  const montage = Number(montageCost) || 0;
+  const amount = amountParts(total);
   const number = String(project && project.orderNumber || project && project.number || 'Б/Н').trim();
   const title = String(project && project.title || 'Лестница').trim();
   const projectNumber = String(project && project.number || number).trim();
@@ -260,6 +273,11 @@ function buildContractHtml({ project, company, contractTotal, date }) {
     '{{RUBLE_WORD}}': amount.rubleWord,
     '{{KOPECKS}}': amount.kopecksText,
     '{{KOPECK_WORD}}': amount.kopeckWord,
+    '{{WORKS_AMOUNT}}': formatMoney(works),
+    '{{DELIVERY_AMOUNT}}': formatMoney(delivery),
+    '{{MONTAGE_AMOUNT}}': formatMoney(montage),
+    '{{PREPAY_AMOUNT}}': formatMoney(works / 2),
+    '{{REMAINDER_AMOUNT}}': formatMoney(works - works / 2),
     '{{PROJECT_LABEL}}': projectLabel,
     '{{INSTALLATION_ADDRESS}}': installationAddress
   };
@@ -352,7 +370,7 @@ function buildContractHtml({ project, company, contractTotal, date }) {
   ${sectionsHtml}
   <h2>11. Реквизиты и подписи Сторон</h2>
   ${requisites}
-  <p class="footer-note">Приложение № 1 — бланк заказа по проекту ${esc(projectLabel)}. Бланк заказа печатается отдельно и прикладывается к настоящему Договору. Стоимость работ по настоящему Договору указана без доставки и монтажа; доставка и монтаж оплачиваются отдельно по факту.</p>
+  <p class="footer-note">Приложение № 1 — бланк заказа по проекту ${esc(projectLabel)}. Бланк заказа печатается отдельно и прикладывается к настоящему Договору. Общая стоимость по настоящему Договору включает работы по изготовлению и покраске, доставку и монтаж; порядок оплаты — п. 5.2.</p>
 </div>
 </body></html>`;
 }

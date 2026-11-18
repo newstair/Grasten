@@ -3,7 +3,7 @@ import { OrbitControls }  from 'three/addons/controls/OrbitControls.js';
 import { ColladaLoader }  from 'three/addons/loaders/ColladaLoader.js';
 import { GLTFLoader }     from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { printContract } from './contract.js?v=3517f6bb';
+import { printContract } from './contract.js?v=640d953c';
 
 /* ═══════════════════════════════════════════════════════════════
    КОНСТАНТЫ
@@ -6823,10 +6823,20 @@ document.getElementById('btnContract').addEventListener('click', async () => {
       showToast('Нет данных для договора', true);
       return;
     }
+    const worksTotal = (Number(result.materialTotal) || 0) + (Number(result.paintTotal) || 0);
+    const deliveryTotal = Number(result.deliveryCost) || 0;
+    const montageTotal = Number(result.montageCost) || 0;
+    const calculatedTotal = Number(result.total);
+    const contractTotal = Number.isFinite(calculatedTotal) && calculatedTotal > 0
+      ? calculatedTotal
+      : worksTotal + deliveryTotal + montageTotal;
     printContract({
       project: getOrderProject(),
       company: ORDER_COMPANY,
-      contractTotal: (Number(result.materialTotal) || 0) + (Number(result.paintTotal) || 0),
+      contractTotal: contractTotal,
+      contractWorks: worksTotal,
+      deliveryCost: deliveryTotal,
+      montageCost: montageTotal,
       date: new Date()
     });
   } catch (error) {
