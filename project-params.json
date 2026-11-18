@@ -1,5 +1,25 @@
 {
   "title": "Грастен",
   "number": "З-2026-0003",
-  "delivery_km": 82
+  "delivery_km": 82,
+  "default_state": {
+    "v": 1,
+    "finish": {
+      "treads": "beech",
+      "handrail": "beech"
+    },
+    "color": {
+      "treads": "wenge",
+      "stringers": "white",
+      "kosour": "white",
+      "handrail": "wenge",
+      "bottomrail": "wenge",
+      "baluster": "white",
+      "posts": "white"
+    },
+    "baluster": "5",
+    "blocks": {
+      "risers_s1": false
+    }
+  }
 }
