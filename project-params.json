@@ -2,6 +2,7 @@
   "title": "Грастен",
   "number": "З-2026-0003",
   "delivery_km": 82,
+  "contract_penalties": false,
   "default_state": {
     "v": 1,
     "finish": {
